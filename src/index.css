@@ -1,7 +1,66 @@
 @import url('https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/static/pretendard.css');
+@import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@500;600;700&display=swap');
 @import "tailwindcss";
 
+html,
 body {
   margin: 0;
+  overflow: hidden;
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
+}
+
+.chat-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: #f3b6c2 rgba(144, 113, 119, 0.08);
+}
+
+.chat-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.chat-scroll::-webkit-scrollbar-track {
+  background: rgba(144, 113, 119, 0.08);
+  border-radius: 9999px;
+}
+
+.chat-scroll::-webkit-scrollbar-thumb {
+  background-color: #f3b6c2;
+  border-radius: 9999px;
+  border: 1px solid rgba(255, 255, 255, 0.6);
+  background-clip: padding-box;
+}
+
+.chat-scroll::-webkit-scrollbar-thumb:hover {
+  background-color: #e8a1b0;
+}
+
+@keyframes thread-tremor {
+  0%,
+  100% {
+    transform: translate(0, 0) rotate(0deg);
+  }
+  15% {
+    transform: translate(-0.6px, 0.3px) rotate(-0.6deg);
+  }
+  30% {
+    transform: translate(0.5px, -0.4px) rotate(0.5deg);
+  }
+  45% {
+    transform: translate(-0.4px, 0.4px) rotate(-0.3deg);
+  }
+  60% {
+    transform: translate(0.6px, -0.3px) rotate(0.6deg);
+  }
+  75% {
+    transform: translate(-0.5px, 0.2px) rotate(-0.4deg);
+  }
+  90% {
+    transform: translate(0.3px, -0.2px) rotate(0.3deg);
+  }
+}
+
+.thread-tremor {
+  animation: thread-tremor 0.35s infinite;
+  transform-box: fill-box;
+  transform-origin: 50% 50%;
 }
