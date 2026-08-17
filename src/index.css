@@ -19,7 +19,7 @@ body {
 }
 
 .chat-scroll::-webkit-scrollbar-track {
-  background: rgba(144, 113, 119, 0.08);
+  background: linear-gradient(to bottom, rgba(255, 214, 224, 0.03) 20.192%, rgba(255, 230, 236, 0) 100%);
   border-radius: 9999px;
 }
 
@@ -34,33 +34,90 @@ body {
   background-color: #e8a1b0;
 }
 
-@keyframes thread-tremor {
+@keyframes avatar-glow-pulse {
   0%,
   100% {
-    transform: translate(0, 0) rotate(0deg);
+    opacity: 0.35;
+    transform: scale(0.92);
   }
-  15% {
-    transform: translate(-0.6px, 0.3px) rotate(-0.6deg);
-  }
-  30% {
-    transform: translate(0.5px, -0.4px) rotate(0.5deg);
-  }
-  45% {
-    transform: translate(-0.4px, 0.4px) rotate(-0.3deg);
-  }
-  60% {
-    transform: translate(0.6px, -0.3px) rotate(0.6deg);
-  }
-  75% {
-    transform: translate(-0.5px, 0.2px) rotate(-0.4deg);
-  }
-  90% {
-    transform: translate(0.3px, -0.2px) rotate(0.3deg);
+  50% {
+    opacity: 0.75;
+    transform: scale(1.04);
   }
 }
 
-.thread-tremor {
-  animation: thread-tremor 0.35s infinite;
-  transform-box: fill-box;
-  transform-origin: 50% 50%;
+.avatar-glow {
+  animation: avatar-glow-pulse 1.6s ease-in-out infinite;
 }
+
+@keyframes typing-dot-bounce {
+  0%,
+  60%,
+  100% {
+    transform: translateY(0);
+    opacity: 0.5;
+  }
+  30% {
+    transform: translateY(-4px);
+    opacity: 1;
+  }
+}
+
+.typing-dot {
+  animation: typing-dot-bounce 1.1s ease-in-out infinite;
+}
+
+.typing-dot:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.typing-dot:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+/* "lub-dub" double-pulse then a pause, like an actual heartbeat, for the love-state heart overlay
+   (see ThreadLine's love branch) — transform-origin is set here rather than left to the default so
+   it scales from its own center instead of its absolutely-positioned top-left corner. */
+@keyframes heart-pulse {
+  0%,
+  36%,
+  100% {
+    transform: scale(1);
+  }
+  12% {
+    transform: scale(1.14);
+  }
+  24% {
+    transform: scale(1.05);
+  }
+}
+
+.heart-pulse {
+  animation: heart-pulse 1.8s ease-in-out infinite;
+  transform-origin: center;
+}
+
+/* A slow rock + slight squeeze/stretch for the tangled-state knot overlay (see ThreadLine's tangled
+   branch) — reads as the knot straining against itself rather than sitting inert. Applied to an
+   inner element so it doesn't fight with the outer wrapper's own centering transform. */
+@keyframes knot-strain {
+  0%,
+  100% {
+    transform: rotate(0deg) scale(1);
+  }
+  25% {
+    transform: rotate(-4deg) scale(1.04, 0.97);
+  }
+  50% {
+    transform: rotate(0deg) scale(0.97, 1.03);
+  }
+  75% {
+    transform: rotate(4deg) scale(1.04, 0.97);
+  }
+}
+
+.knot-strain {
+  animation: knot-strain 2.4s ease-in-out infinite;
+  transform-origin: center;
+}
+
