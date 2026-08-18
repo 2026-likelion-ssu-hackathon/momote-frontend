@@ -44,6 +44,12 @@ html,
 body {
   margin: 0;
   overflow: hidden;
+  /* Fallback behind the app's own background — iOS Safari's dynamic toolbar animation and
+     rubber-band overscroll can momentarily expose a sliver of the raw html/body background before
+     the app's own gradient div catches up; without this it flashes white (the browser default)
+     instead of blending into the app. theme-color (see index.html) only tints Safari's own chrome
+     and isn't reliable outside PWA/standalone mode, so this is the fix that actually holds. */
+  background-color: #fff6fa;
   font-family: 'Pretendard', -apple-system, BlinkMacSystemFont, sans-serif;
 }
 
