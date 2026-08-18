@@ -13,6 +13,33 @@
   font-display: swap;
 }
 
+/* Crossfade between two ThreadLine moods (see ThreadLineTransition in App.jsx) — a plain
+   @keyframes animation runs from its own `from` state on mount regardless of when the element
+   appears, unlike a CSS transition (which needs an already-rendered "previous" style to animate
+   from and would otherwise just pop straight to its target value on first paint). */
+@keyframes thread-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+@keyframes thread-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+.thread-fade-in {
+  animation: thread-fade-in 450ms ease-out forwards;
+}
+.thread-fade-out {
+  animation: thread-fade-out 450ms ease-out forwards;
+}
+
 html,
 body {
   margin: 0;
