@@ -3,6 +3,11 @@ import arrowUpIcon from './assets/icons/arrow-up.svg'
 import speechBubbleIcon from './assets/icons/speech-bubble.svg'
 import avatarBlue from './assets/avatars/avatar-blue.png'
 import avatarPink from './assets/avatars/avatar-pink.png'
+import threadHappyGif from './assets/thread/happy.gif'
+import threadLoveGif from './assets/thread/love.gif'
+import threadNeutralGif from './assets/thread/neutral.gif'
+import threadTangledGif from './assets/thread/tangled.gif'
+import threadTenseGif from './assets/thread/tense.gif'
 import { fetchDateCourseRecommendation, fetchToneCorrection, fetchVideoRecommendation } from './api'
 
 function formatTimeKorean(date) {
@@ -146,237 +151,58 @@ const THREAD_TO_SUGGESTION = {
   tangled: 'video',
 }
 
-// Sampled (not Bezier-approximated) sine wave for the "happy" thread — plotting exact y values at
-// each x lets the amplitude reach all the way to the viewBox edges predictably, unlike a quadratic
-// Bezier whose midpoint only travels halfway to its control point. `phaseOffset` shifts the whole
-// curve sideways in viewBox units; animating through a sequence of offsets one period apart is what
-// makes the crests visibly travel across instead of just pulsing in place.
-const WAVE_PERIOD = 14
-// 26 / 1.8 — the viewBox/container stay at their full 52px (see the row-height note on
-// WAVE_BASELINE_Y below), only the swing itself got smaller.
-const WAVE_AMPLITUDE = 26 / 1.8
-// SMIL's <animate calcMode="linear"> straight-line-interpolates between consecutive `d` keyframes —
-// with only 8 keyframes per period, each keyframe jump was big enough (especially once WAVE_PERIOD
-// shortened) to read as the wave jittering/vibrating in place rather than smoothly rolling. More,
-// closer-together keyframes over the same duration make the interpolation itself read as continuous
-// motion instead of discrete snaps.
-const WAVE_STEP_COUNT = 24
-// Vertical center of the wave within its viewBox — kept as its own constant (not a literal "10")
-// since it has to move in lockstep with WAVE_AMPLITUDE and the happy ThreadLine's viewBox height
-// (see its use in App()) to keep the crests from clipping against the top/bottom edges.
-const WAVE_BASELINE_Y = 26
-function buildWavePath(phaseOffset) {
-  let d = ''
-  for (let x = 0; x <= 100; x += 2.5) {
-    const y = WAVE_BASELINE_Y + WAVE_AMPLITUDE * Math.sin((2 * Math.PI * (x - phaseOffset)) / WAVE_PERIOD)
-    d += `${x === 0 ? 'M' : 'L'}${x} ${y.toFixed(2)} `
-  }
-  return d.trim()
+// Display height per mood. The thread always stretches to the full avatar-to-avatar width, so this
+// height is what sets how thick the stroke reads. Each value is its asset's own cropped pixel
+// height, which keeps the designer's stroke weight exactly as drawn — a phone-width thread is about
+// the artwork's native width, so 1:1 vertically means 1:1 overall — except where noted below.
+const THREAD_HEIGHT_PX = {
+  // tense and happy are the two that can't render at their native height: their peaks are 66px and
+  // 58px tall, which centred on the avatar row would overrun the feeling caption below by 7px and
+  // 3px (the caption starts exactly at the avatars' bottom edge — there is no slack there). 52px
+  // puts both waveforms' peaks right at the avatars' top and bottom edges instead, which is where
+  // the amplitude was asked to reach back when these were generated waves, and the assets' 2px
+  // transparent margin keeps them off the caption. The rest render 1:1.
+  tense: 52,
+  happy: 52,
+  love: 48,
+  neutral: 26,
+  tangled: 47,
 }
-const WAVE_PATHS = Array.from({ length: WAVE_STEP_COUNT + 1 }, (_, i) => buildWavePath((i / WAVE_STEP_COUNT) * WAVE_PERIOD))
 
-// A tight, sharp zigzag bracketed by small approach/settle wiggles, its center offset from a flat
-// baseline on both sides. Peak/valley heights are deliberately uneven (not a clean double-spike of
-// matching amplitude) — an even, metronome-like burst reads as too controlled for "감정이 격해진"
-// agitation; irregular heights read as more chaotic. Unlike a one-shot reaction to a single message,
-// this loops continuously (see its use in ThreadLine below) so the tense mood reads as ongoing
-// agitation for as long as the thread stays tense, not a burst that fires once and goes still.
-const TENSE_BURST = [
-  [0, 14],
-  [3, 14],
-  [4.5, 18],
-  [6, 10],
-  [7, 25],
-  [8.5, 3],
-  [10, 20],
-  [11.5, 7],
-  [13, 16],
-  [14.5, 12],
-  [16, 14],
-  [20, 14],
-]
-const TENSE_STEP_COUNT = 7
-const TENSE_FLAT_PATH = 'M0 14 L100 14'
-// centerX runs 8 (burst sitting inside the left avatar's own footprint, ~0-17 of the 100-wide
-// viewBox) to 92 (inside the right avatar's) so the burst visibly emerges from one profile picture
-// and arrives at the other's, instead of just crossing the middle stretch between them.
-function buildTenseBurstPath(centerX) {
-  const points = TENSE_BURST.map(([dx, y]) => [centerX - 10 + dx, y])
-  const first = points[0]
-  const middle = points
-    .slice(1)
-    .map(([x, y]) => `L${x} ${y}`)
-    .join(' ')
-  return `M0 14 L${first[0]} ${first[1]} ${middle} L100 14`
+// The designer's own animated artwork, one GIF per mood. Each carries its motion frame by frame,
+// so there is no CSS animation on top — these replaced both the traced vector shapes this used to
+// draw and the CSS pulses that were standing in for the real motion. Assets are cropped to their
+// own content box by scripts/render/prepare_thread_gifs.py; see that script for why an uncropped
+// canvas breaks the centering on the avatar row.
+const THREAD_GIFS = {
+  happy: threadHappyGif,
+  love: threadLoveGif,
+  neutral: threadNeutralGif,
+  tangled: threadTangledGif,
+  tense: threadTenseGif,
 }
-const TENSE_PATHS = [
-  TENSE_FLAT_PATH,
-  ...Array.from({ length: TENSE_STEP_COUNT + 1 }, (_, i) => buildTenseBurstPath(8 + (i / TENSE_STEP_COUNT) * 84)),
-  TENSE_FLAT_PATH,
-]
 
-// Roughens an otherwise-clean stroke into a crayon/marker-like line — displacing the path through
-// fractal noise instead of drawing a perfectly smooth vector. Defined once (see its use in App())
-// and shared by every ThreadLine variant via `filter="url(#thread-crayon)"` so the whole thread
-// has one consistent hand-drawn texture rather than a mix of smooth and rough strokes.
-function ThreadCrayonFilter() {
-  return (
-    <svg width="0" height="0" className="absolute">
-      <defs>
-        {/* filterUnits is userSpaceOnUse, not the objectBoundingBox default, on purpose: several
-            ThreadLine paths are perfectly horizontal (the flat seam runs into the love/tangled
-            overlays) and so have a zero-height bounding box — a percentage-based region resolves
-            its height to 0% of that and silently clips the entire filtered stroke invisible. Fixed
-            bounds sized to comfortably cover every viewBox this filter is used in (up to "0 0 100
-            16") sidesteps the issue for all of them at once. */}
-        <filter id="thread-crayon" x="-20" y="-30" width="140" height="80" filterUnits="userSpaceOnUse">
-          <feTurbulence type="fractalNoise" baseFrequency="0.35" numOctaves="2" seed="3" result="noise" />
-          <feDisplacementMap in="SourceGraphic" in2="noise" scale="1.5" xChannelSelector="R" yChannelSelector="G" />
-        </filter>
-      </defs>
-    </svg>
-  )
-}
+// Half an avatar (they are size-[52px]), so the thread runs between the two profile circles' centre
+// x rather than their outer edges — each end starts under its own avatar and emerges from behind it.
+// The avatars carry z-10 and the thread does not, so they stay on top and hide the tucked-in ends.
+const THREAD_INSET_PX = 26
 
 function ThreadLine({ mood }) {
-  if (mood === 'tense') {
-    // Loops via repeatCount="indefinite" instead of firing once per aggressive message — the tense
-    // mood itself should read as continuously agitated for as long as the thread stays tense.
-    return (
-      <svg
-        className="absolute inset-x-0 top-1/2 h-[28px] w-full -translate-y-1/2"
-        viewBox="0 0 100 28"
-        preserveAspectRatio="none"
-        fill="none"
-      >
-        <path filter="url(#thread-crayon)" stroke="#f25597" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d={TENSE_PATHS[0]}>
-          <animate attributeName="d" values={TENSE_PATHS.join(';')} dur="3.2s" repeatCount="indefinite" calcMode="linear" />
-        </path>
-      </svg>
-    )
-  }
-
-  if (mood === 'happy') {
-    // Matches Figma 593:2214 — a continuous multi-hump sound wave whose crests visibly travel
-    // across (see WAVE_PATHS) rather than pulsing in place.
-    return (
-      <svg
-        // left + explicit width (not right-[26px]) — svg is a replaced element, so position:absolute
-        // with left+right set but no width does NOT auto-stretch to fill the gap the way a normal
-        // block element would; it just renders at its viewBox's intrinsic size instead. 26px is half
-        // the 52px avatar circle, so the wave's own x=0/x=100 edges land on each avatar's CENTER
-        // rather than its outer rim, instead of spanning the full row (avatars' outer edges).
-        className="absolute left-[26px] top-1/2 h-[52px] w-[calc(100%-52px)] -translate-y-1/2"
-        viewBox="0 0 100 52"
-        preserveAspectRatio="none"
-        fill="none"
-      >
-        {/* No thread-crayon filter here (unlike every other ThreadLine state) — that filter
-            displaces the stroke through a fixed turbulence field, and since this path's `d` is
-            itself animating every frame, each frame's geometry samples a different, uncorrelated
-            slice of that noise. The other states' filtered strokes are static (or only occasionally
-            re-triggered, like tense), so the same noise field just reads as a steady hand-drawn
-            wobble; here it stacked a constant high-frequency jitter on top of the intended smooth
-            wave motion, reading as trembling rather than rolling. */}
-        <path
-          stroke="#f3b6c2"
-          strokeWidth="1"
-          strokeLinecap="round"
-          strokeLinejoin="round"
-          d={WAVE_PATHS[0]}
-        >
-          <animate attributeName="d" values={WAVE_PATHS.join(';')} dur="2.1s" repeatCount="indefinite" calcMode="linear" />
-        </path>
-      </svg>
-    )
-  }
-
-  // love/tangled: the connecting line itself stays two plain runs (drawn inside the same stretched
-  // viewBox as the other states, where a constant-y or gently-curved segment isn't distorted by
-  // the non-uniform x/y scale) with the heart/knot itself overlaid at the midpoint in its own
-  // undistorted SVG, tails reaching to its edges so the string reads as continuous — a shape this
-  // detailed would smear into an unrecognizable sliver if drawn directly inside the ~3:1
-  // horizontally-stretched viewBox the other states use. The overlay is positioned with explicit
-  // left/top/width/height (not the usual center-transform) and sized so its viewBox has no
-  // letterboxing, so the exact pixel where its tail meets the main line can be computed and
-  // matched instead of eyeballed — otherwise the seam shows a visible gap or thickness jump.
-  if (mood === 'love') {
-    return (
-      <>
-        <svg
-          className="absolute inset-x-0 top-1/2 h-[16px] w-full -translate-y-1/2"
-          viewBox="0 0 100 16"
-          preserveAspectRatio="none"
-          fill="none"
-        >
-          <path filter="url(#thread-crayon)" d="M0 8 L44 8" stroke="#f25597" strokeWidth="2" strokeLinecap="round" />
-          <path filter="url(#thread-crayon)" d="M56 8 L100 8" stroke="#f25597" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-        {/* Percentage left/width, not fixed px — the container is now a responsive-width row (see the
-            app's viewport conversion), so a hardcoded px offset drifts out of alignment with the gap
-            left in the percentage-based main line above as the screen width changes. */}
-        <svg className="heart-pulse absolute left-[42.52%] top-[-0.25px] h-[32.5px] w-[14.95%]" viewBox="0 0 36 26" fill="none">
-          <path
-            filter="url(#thread-crayon)"
-            d="M0,21 L4,21 L18,24 C13,19 7,14 7,8 C7,4 10.5,2 14,2 C16,2 18,4 18,7 C18,4 20,2 22,2 C25.5,2 29,4 29,8 C29,14 23,19 18,24 L32,21 L36,21"
-            stroke="#f25597"
-            strokeWidth="1.6"
-            strokeLinecap="round"
-            strokeLinejoin="round"
-          />
-        </svg>
-      </>
-    )
-  }
-
-  // Matches Figma 620:2887 — a wavy string that ties itself into one big, clearly visible knot at
-  // the midpoint rather than a small disconnected squiggle. The knot's own SVG is scaled up
-  // (nearly as tall as the 52px avatar row) so it reads immediately, but that means it's scaled
-  // uniformly (1.75x) while the wavy runs sit in a viewBox stretched non-uniformly (~3x horizontally
-  // vs vertically) — matching stroke width takes dividing back by that 1.75x, and matching the seam
-  // angle takes ending/starting both pieces on a perfectly flat (horizontal) tangent, since a flat
-  // line stays flat under any independent x/y scaling. Without both fixes the join reads as a
-  // visible kink with a sudden thickness change even when the endpoints line up exactly.
-  if (mood === 'tangled') {
-    return (
-      <>
-        <svg
-          className="absolute inset-x-0 top-1/2 h-[16px] w-full -translate-y-1/2"
-          viewBox="0 0 100 16"
-          preserveAspectRatio="none"
-          fill="none"
-        >
-          <path filter="url(#thread-crayon)" d="M0 8 Q11 3 22 8 Q30 13 36 8 L43 8" stroke="#f25597" strokeWidth="2" strokeLinecap="round" />
-          <path filter="url(#thread-crayon)" d="M57 8 L64 8 Q72 3 78 8 Q89 13 100 8" stroke="#f25597" strokeWidth="2" strokeLinecap="round" />
-        </svg>
-        {/* Centering (translate -50%/-50%) lives on this static outer wrapper, separate from the
-            knot-strain animation's own transform on the inner svg below, so the two don't clobber
-            each other (both would otherwise fight over the single `transform` property). */}
-        <div className="absolute left-1/2 top-1/2 h-[42px] w-[42px] -translate-x-1/2 -translate-y-1/2">
-          <svg className="knot-strain size-full" viewBox="0 0 24 24" fill="none">
-            <path
-              filter="url(#thread-crayon)"
-              d="M0,12 C4,12 5,7 9,8 C13,9 16,6 14,10 C12.5,12.7 8,11 9,15 C10,19 16,18 17,14 C17.8,10.8 13,10 15,7 C16.5,4.7 20,6 20,10 C20,12 22,12 24,12"
-              stroke="#f25597"
-              strokeWidth="1.15"
-              strokeLinecap="round"
-              strokeLinejoin="round"
-            />
-          </svg>
-        </div>
-      </>
-    )
-  }
-
   return (
-    <svg
-      className="absolute inset-x-0 top-1/2 h-[16px] w-full -translate-y-1/2"
-      viewBox="0 0 100 16"
-      preserveAspectRatio="none"
-      fill="none"
-    >
-      <path filter="url(#thread-crayon)" d="M10 3 Q50 18 90 3" stroke="#f3b6c2" strokeWidth="2" strokeLinecap="round" />
-    </svg>
+    <img
+      src={THREAD_GIFS[mood] ?? THREAD_GIFS.neutral}
+      alt=""
+      aria-hidden="true"
+      className="absolute top-1/2 -translate-y-1/2"
+      style={{
+        left: `${THREAD_INSET_PX}px`,
+        // Width is stated rather than left to `right: 26px`: an absolutely positioned *replaced*
+        // element with auto width falls back to its intrinsic size instead of stretching to meet
+        // the right offset, so the thread would stop short of the far avatar at its own pixel width.
+        width: `calc(100% - ${THREAD_INSET_PX * 2}px)`,
+        height: `${THREAD_HEIGHT_PX[mood] ?? THREAD_HEIGHT_PX.neutral}px`,
+      }}
+    />
   )
 }
 
@@ -804,7 +630,6 @@ function App() {
   return (
     <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
       <div className="relative h-full w-full max-w-[480px] overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%]">
-        <ThreadCrayonFilter />
         {/* Message list and input bar keep their full natural size at all times — the sheet is a
             translucent, blurred overlay that floats above them as it grows, rather than shrinking
             them. Positioned with top+bottom (not a JS-computed height) so it fills whatever space
