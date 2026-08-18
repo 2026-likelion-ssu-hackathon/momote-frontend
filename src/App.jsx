@@ -848,7 +848,9 @@ function App() {
               onChange={(e) => setInputValue(e.target.value)}
               onKeyDown={handleKeyDown}
               placeholder="메시지를 입력하세요"
-              className="flex-1 bg-transparent text-[15px] font-medium text-[#271518] outline-none placeholder:text-[#c9a2a8]"
+              // 16px, not 15 — iOS Safari auto-zooms the whole page on focus for any input whose
+              // font-size is under 16px (it assumes the text is too small to type comfortably).
+              className="flex-1 bg-transparent text-[16px] font-medium text-[#271518] outline-none placeholder:text-[#c9a2a8]"
             />
             <button
               type="button"
