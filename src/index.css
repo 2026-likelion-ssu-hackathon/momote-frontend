@@ -49,7 +49,7 @@ body {
 
 .chat-scroll {
   scrollbar-width: thin;
-  scrollbar-color: transparent transparent;
+  scrollbar-color: rgba(243, 182, 194, 0.1) transparent;
 }
 
 .chat-scroll::-webkit-scrollbar {
@@ -61,7 +61,7 @@ body {
 }
 
 .chat-scroll::-webkit-scrollbar-thumb {
-  background-color: transparent;
+  background-color: rgba(243, 182, 194, 0.1);
   border-radius: 9999px;
 }
 

@@ -460,7 +460,7 @@ function VideoCard({
         href={youtubeWatchUrl(videoId)}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-[10px] block w-[calc(100%-70px)] shrink-0 cursor-pointer overflow-hidden rounded-[20px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
+        className="mt-[22px] block w-[290px] shrink-0 cursor-pointer overflow-hidden rounded-[20px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
       >
         <img src={youtubeThumbnailUrl(videoId)} alt="" className="h-[112px] w-full object-cover" />
         <div className="px-3 pb-[8px] pt-[10px]">
@@ -864,7 +864,7 @@ function App() {
         <div
           style={{
             height: sheetHeightValue,
-            background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.50) 23.63%, rgba(255, 218, 227, 0.50) 100.31%)',
+            background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.1) 23.63%, rgba(255, 218, 227, 0.1) 100.31%)',
             transition: sizeTransition,
           }}
           className="absolute left-[6px] right-[6px] top-0 z-10 overflow-hidden rounded-[28px] border-[3px] border-[#f4e0e5] shadow-[0_4px_20px_rgba(92,62,98,0.15)] backdrop-blur-md"
@@ -914,13 +914,10 @@ function App() {
               {/* Undeclared fields (isRelevant, statusLabel) from the API response are just extra
                   props the card component doesn't destructure — harmless. No data yet (first load,
                   or the request failed) means an empty spread, so the card's own default param
-                  values (its hardcoded example content) render instead. */}
+                  values (its hardcoded example content) render instead. No loading indicator here —
+                  with no backend wired up yet every fetch briefly enters "loading" on every message,
+                  so it would otherwise flash on top of the example content constantly. */}
               <SuggestionCard {...suggestionData.data} />
-              {suggestionData.status === 'loading' && !suggestionData.data && (
-                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-[1px]">
-                  <span className="font-['MemomentKkukkukk'] text-[13px] text-[#7d6a71]">AI가 대화를 분석하고 있어요...</span>
-                </div>
-              )}
             </div>
           )}
         </div>
