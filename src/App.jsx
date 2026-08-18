@@ -3,6 +3,7 @@ import arrowUpIcon from './assets/icons/arrow-up.svg'
 import speechBubbleIcon from './assets/icons/speech-bubble.svg'
 import avatarBlue from './assets/avatars/avatar-blue.png'
 import avatarPink from './assets/avatars/avatar-pink.png'
+import { fetchDateCourseRecommendation, fetchToneCorrection, fetchVideoRecommendation } from './api'
 
 function formatTimeKorean(date) {
   const hours = date.getHours()
@@ -150,13 +151,24 @@ const THREAD_TO_SUGGESTION = {
 // Bezier whose midpoint only travels halfway to its control point. `phaseOffset` shifts the whole
 // curve sideways in viewBox units; animating through a sequence of offsets one period apart is what
 // makes the crests visibly travel across instead of just pulsing in place.
-const WAVE_PERIOD = 20
-const WAVE_AMPLITUDE = 9
-const WAVE_STEP_COUNT = 8
+const WAVE_PERIOD = 14
+// 26 / 1.8 — the viewBox/container stay at their full 52px (see the row-height note on
+// WAVE_BASELINE_Y below), only the swing itself got smaller.
+const WAVE_AMPLITUDE = 26 / 1.8
+// SMIL's <animate calcMode="linear"> straight-line-interpolates between consecutive `d` keyframes —
+// with only 8 keyframes per period, each keyframe jump was big enough (especially once WAVE_PERIOD
+// shortened) to read as the wave jittering/vibrating in place rather than smoothly rolling. More,
+// closer-together keyframes over the same duration make the interpolation itself read as continuous
+// motion instead of discrete snaps.
+const WAVE_STEP_COUNT = 24
+// Vertical center of the wave within its viewBox — kept as its own constant (not a literal "10")
+// since it has to move in lockstep with WAVE_AMPLITUDE and the happy ThreadLine's viewBox height
+// (see its use in App()) to keep the crests from clipping against the top/bottom edges.
+const WAVE_BASELINE_Y = 26
 function buildWavePath(phaseOffset) {
   let d = ''
   for (let x = 0; x <= 100; x += 2.5) {
-    const y = 10 + WAVE_AMPLITUDE * Math.sin((2 * Math.PI * (x - phaseOffset)) / WAVE_PERIOD)
+    const y = WAVE_BASELINE_Y + WAVE_AMPLITUDE * Math.sin((2 * Math.PI * (x - phaseOffset)) / WAVE_PERIOD)
     d += `${x === 0 ? 'M' : 'L'}${x} ${y.toFixed(2)} `
   }
   return d.trim()
@@ -249,20 +261,31 @@ function ThreadLine({ mood }) {
     // across (see WAVE_PATHS) rather than pulsing in place.
     return (
       <svg
-        className="absolute inset-x-0 top-1/2 h-[20px] w-full -translate-y-1/2"
-        viewBox="0 0 100 20"
+        // left + explicit width (not right-[26px]) — svg is a replaced element, so position:absolute
+        // with left+right set but no width does NOT auto-stretch to fill the gap the way a normal
+        // block element would; it just renders at its viewBox's intrinsic size instead. 26px is half
+        // the 52px avatar circle, so the wave's own x=0/x=100 edges land on each avatar's CENTER
+        // rather than its outer rim, instead of spanning the full row (avatars' outer edges).
+        className="absolute left-[26px] top-1/2 h-[52px] w-[calc(100%-52px)] -translate-y-1/2"
+        viewBox="0 0 100 52"
         preserveAspectRatio="none"
         fill="none"
       >
+        {/* No thread-crayon filter here (unlike every other ThreadLine state) — that filter
+            displaces the stroke through a fixed turbulence field, and since this path's `d` is
+            itself animating every frame, each frame's geometry samples a different, uncorrelated
+            slice of that noise. The other states' filtered strokes are static (or only occasionally
+            re-triggered, like tense), so the same noise field just reads as a steady hand-drawn
+            wobble; here it stacked a constant high-frequency jitter on top of the intended smooth
+            wave motion, reading as trembling rather than rolling. */}
         <path
-          filter="url(#thread-crayon)"
           stroke="#f3b6c2"
-          strokeWidth="2"
+          strokeWidth="1"
           strokeLinecap="round"
           strokeLinejoin="round"
           d={WAVE_PATHS[0]}
         >
-          <animate attributeName="d" values={WAVE_PATHS.join(';')} dur="1.4s" repeatCount="indefinite" calcMode="linear" />
+          <animate attributeName="d" values={WAVE_PATHS.join(';')} dur="2.1s" repeatCount="indefinite" calcMode="linear" />
         </path>
       </svg>
     )
@@ -355,6 +378,35 @@ function ThreadLine({ mood }) {
       <path filter="url(#thread-crayon)" d="M10 3 Q50 18 90 3" stroke="#f3b6c2" strokeWidth="2" strokeLinecap="round" />
     </svg>
   )
+}
+
+// How long the crossfade between two ThreadLine moods takes — long enough to read as a deliberate
+// transition, short enough not to lag behind the mood actually changing.
+const THREAD_TRANSITION_MS = 450
+
+// Each ThreadLine mood is a structurally different SVG (different path counts, some with a
+// separate heart/knot overlay) — switching `mood` directly would just pop from one to the other
+// with no transition. This keeps the outgoing mood mounted just long enough to fade out while the
+// incoming one fades in on top of it, instead of trying to morph between two unrelated shapes.
+function ThreadLineTransition({ mood }) {
+  const [layers, setLayers] = useState(() => [{ mood, key: 0 }])
+  const nextKeyRef = useRef(1)
+
+  useEffect(() => {
+    setLayers((prev) => (prev[prev.length - 1].mood === mood ? prev : [...prev, { mood, key: nextKeyRef.current++ }]))
+  }, [mood])
+
+  useEffect(() => {
+    if (layers.length <= 1) return
+    const id = setTimeout(() => setLayers((prev) => prev.slice(-1)), THREAD_TRANSITION_MS)
+    return () => clearTimeout(id)
+  }, [layers])
+
+  return layers.map((layer, i) => (
+    <div key={layer.key} className={`absolute inset-0 ${i === layers.length - 1 ? 'thread-fade-in' : 'thread-fade-out'}`}>
+      <ThreadLine mood={layer.mood} />
+    </div>
+  ))
 }
 
 // Default profile photo — the user's own placeholder artwork, recolored per side (see
@@ -538,8 +590,9 @@ const DATE_COURSE_STATUS = '잠실 롯데월드 영화 데이트 코스'
 const VIDEO_STATUS = '비슷한 상황을 다룬 추천 영상이에요'
 
 // Maps each "situation" to the single card shown in the one shared 50% reveal zone, and to the
-// bold summary text shown in the shared mood-card above it. Which key is active will come from
-// an AI worker classifying the conversation — see the suggestionType TODO in App().
+// bold summary text shown in the shared mood-card above it. Which key is active comes from the
+// client-side keyword classifier in classifyConversation — the API call below only supplies that
+// active card's actual content, it doesn't decide which card is active.
 const SUGGESTION_SCREENS = {
   toneCorrection: ToneCorrectionCard,
   dateCourse: DateCourseCard,
@@ -552,48 +605,12 @@ const SUGGESTION_STATUS = {
   video: VIDEO_STATUS,
 }
 
-function StatusBar() {
-  const [now, setNow] = useState(() => new Date())
-
-  useEffect(() => {
-    const id = setInterval(() => setNow(new Date()), 15000)
-    return () => clearInterval(id)
-  }, [])
-
-  const timeText = `${now.getHours()}:${String(now.getMinutes()).padStart(2, '0')}`
-
-  return (
-    <div className="relative flex h-[40px] shrink-0 items-center justify-between px-[18px]">
-      <span className="text-[13px] font-semibold tracking-tight text-[#1a1a1a]">{timeText}</span>
-
-      <div className="absolute left-1/2 top-1/2 h-[26px] w-[84px] -translate-x-1/2 -translate-y-1/2 rounded-full bg-black" />
-
-      <div className="flex items-center gap-[6px]">
-        <svg width="16" height="11" viewBox="0 0 18 12" fill="none">
-          <rect x="0" y="7" width="3" height="5" rx="0.7" fill="#1a1a1a" />
-          <rect x="5" y="5" width="3" height="7" rx="0.7" fill="#1a1a1a" />
-          <rect x="10" y="3" width="3" height="9" rx="0.7" fill="#1a1a1a" />
-          <rect x="15" y="0" width="3" height="12" rx="0.7" fill="#1a1a1a" />
-        </svg>
-        <svg width="15" height="11" viewBox="0 0 16 12" fill="none">
-          <circle cx="8" cy="10.5" r="1.3" fill="#1a1a1a" />
-          <path
-            d="M4.7 8a4.7 4.7 0 016.6 0L9.9 9.4a2.7 2.7 0 00-3.8 0L4.7 8z"
-            fill="#1a1a1a"
-          />
-          <path
-            d="M1.8 5.1a8.7 8.7 0 0112.4 0l-1.4 1.4a6.7 6.7 0 00-9.6 0L1.8 5.1z"
-            fill="#1a1a1a"
-          />
-        </svg>
-        <svg width="22" height="11" viewBox="0 0 25 12" fill="none">
-          <rect x="0.5" y="0.5" width="21" height="11" rx="2.5" stroke="#1a1a1a" strokeOpacity="0.4" />
-          <rect x="2" y="2" width="18" height="8" rx="1.5" fill="#1a1a1a" />
-          <rect x="22.5" y="4" width="1.5" height="4" rx="0.7" fill="#1a1a1a" fillOpacity="0.4" />
-        </svg>
-      </div>
-    </div>
-  )
+// One real API call per suggestion type (see src/api.js) — each returns fields shaped to match
+// that type's card props exactly, so the response can be spread straight onto <SuggestionCard />.
+const SUGGESTION_FETCHERS = {
+  toneCorrection: fetchToneCorrection,
+  dateCourse: fetchDateCourseRecommendation,
+  video: fetchVideoRecommendation,
 }
 
 function DateDivider({ label }) {
@@ -656,10 +673,11 @@ function TypingIndicator() {
 
 // How long the "typing..." indicator (see TypingIndicator) shows before the auto-reply lands.
 const TYPING_REPLY_DELAY_MS = 1500
-const STATUS_BAR_HEIGHT = 40
 const HEADER_HEIGHT = 135 // gap-8 + mood card (pt-16 + avatar row-52 + gap-10 + text-35 + pb-6 = 119) + gap-8
 const INPUT_BAR_HEIGHT = 80 // pt-[8px] + h-[52px] + pb-[20px]
-const HEADER_FOOTPRINT_PX = STATUS_BAR_HEIGHT + HEADER_HEIGHT
+// The real device's own OS status bar already shows above the browser viewport, so the app no
+// longer draws its own — HEADER_FOOTPRINT_PX is just the mood-card header now.
+const HEADER_FOOTPRINT_PX = HEADER_HEIGHT
 // The suggestion panel's open height, as a percentage of the frame's own (now viewport-driven, not
 // fixed) height — so it scales with whatever screen the app is actually running on instead of a
 // single hardcoded design size. Tone-correction and date-course both fit within the standard 50%
@@ -716,6 +734,31 @@ function App() {
     }
   }, [messages])
   const { threadState, suggestionType } = classification
+
+  // Real content for whichever suggestion card is active, from the team's backend (see
+  // SUGGESTION_FETCHERS / src/api.js) — refetches whenever the active type changes or a new
+  // message arrives, since either can change what the AI should say. `data` is kept (not reset to
+  // null) while a refetch is in flight so the card doesn't flash back to its hardcoded example
+  // content between an old and new answer; it only falls back to those defaults on the very first
+  // load, or if the request fails outright (no backend running, network error, etc.) — see its use
+  // in the SuggestionCard render below.
+  const [suggestionData, setSuggestionData] = useState({ status: 'idle', data: null })
+  useEffect(() => {
+    if (!hasMessages) return
+    let cancelled = false
+    setSuggestionData((prev) => ({ status: 'loading', data: prev.data }))
+    SUGGESTION_FETCHERS[suggestionType](messages.slice(-MOOD_HISTORY_SIZE))
+      .then((data) => {
+        if (!cancelled) setSuggestionData({ status: 'success', data })
+      })
+      .catch((error) => {
+        console.warn(`Failed to fetch ${suggestionType} suggestion — falling back to example content.`, error)
+        if (!cancelled) setSuggestionData((prev) => ({ status: 'error', data: prev.data }))
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [hasMessages, suggestionType, messages])
 
   function handleSend() {
     const text = inputValue.trim()
@@ -826,14 +869,13 @@ function App() {
           }}
           className="absolute left-[6px] right-[6px] top-0 z-10 overflow-hidden rounded-[28px] border-[3px] border-[#f4e0e5] shadow-[0_4px_20px_rgba(92,62,98,0.15)] backdrop-blur-md"
         >
-          <StatusBar />
           {/* Header content sits directly on the sheet's own card background/border above — no
               separate box of its own, so it reads as one continuous card with the expand zone below
               (matching Figma 643:2971, where only the inner quote box is separately bordered). */}
-          <div className="absolute left-[17px] right-[17px] top-[48px] px-5 pt-4 pb-[6px]">
+          <div className="absolute left-[17px] right-[17px] top-[8px] px-5 pt-4 pb-[6px]">
             <div className="relative -mx-[12px] flex h-[52px] items-center justify-between">
               <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" />
-              <ThreadLine mood={threadState} />
+              <ThreadLineTransition mood={threadState} />
               <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="pink" />
             </div>
             <div className="mt-0 flex h-[35px] flex-col items-center justify-start gap-[3px] text-center">
@@ -847,7 +889,9 @@ function App() {
                     {THREAD_FEELING_TEXT[threadState]}
                   </span>
                   {THREAD_TO_SUGGESTION[threadState] === suggestionType && (
-                    <span className="text-[14px] font-semibold text-[#f25597]">{SUGGESTION_STATUS[suggestionType]}</span>
+                    <span className="text-[14px] font-semibold text-[#f25597]">
+                      {suggestionData.data?.statusLabel ?? SUGGESTION_STATUS[suggestionType]}
+                    </span>
                   )}
                 </>
               )}
@@ -867,7 +911,16 @@ function App() {
               }}
               className="chat-scroll absolute left-0 right-0 overflow-y-auto px-[10px] pb-[8px] pt-0"
             >
-              <SuggestionCard />
+              {/* Undeclared fields (isRelevant, statusLabel) from the API response are just extra
+                  props the card component doesn't destructure — harmless. No data yet (first load,
+                  or the request failed) means an empty spread, so the card's own default param
+                  values (its hardcoded example content) render instead. */}
+              <SuggestionCard {...suggestionData.data} />
+              {suggestionData.status === 'loading' && !suggestionData.data && (
+                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-white/50 backdrop-blur-[1px]">
+                  <span className="font-['MemomentKkukkukk'] text-[13px] text-[#7d6a71]">AI가 대화를 분석하고 있어요...</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -882,12 +935,18 @@ function App() {
               top: sheetHeightValue,
               transition: 'top 300ms ease-out',
             }}
-            // A plain drag-handle bar (matches the Figma sheet's own handle), not a circular
-            // icon-button — the padding here keeps the tap target comfortably large even though the
-            // visible bar itself is thin.
-            className="absolute left-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center px-[14px] py-[10px] transition-transform duration-[120ms] ease-out hover:scale-[1.08] active:scale-[0.92]"
+            className="absolute left-1/2 z-20 flex size-[17px] -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full bg-white/90 shadow-[0_2px_8px_rgba(92,62,98,0.25)] transition-transform duration-[120ms] ease-out hover:scale-[1.08] active:scale-[0.92]"
           >
-            <span className="block h-[4px] w-[43px] rounded-full bg-white/90 shadow-[0_2px_6px_rgba(92,62,98,0.25)]" />
+            <svg
+              width="7"
+              height="5"
+              viewBox="0 0 13 8"
+              fill="none"
+              className="transition-transform duration-300 ease-out"
+              style={{ transform: isSheetOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
+            >
+              <path d="M1 1L6.5 6.5L12 1" stroke="#E4598C" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
+            </svg>
           </button>
         )}
       </div>
