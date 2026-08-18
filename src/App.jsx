@@ -38,10 +38,18 @@ const MOOD_TENSE_KEYWORDS = ['싫어', '짜증', '화나', '화났', '삐졌', '
 const LOVE_KEYWORDS = ['사랑해', '좋아해', '사랑']
 const MOOD_HISTORY_SIZE = 6
 
-// How far back a suggestion's trigger message may be before the card is retired. Deliberately the
-// same window as MOOD_HISTORY_SIZE: both answer "how much of this conversation is still current",
-// and letting them drift apart would show a card about a message the mood no longer reflects.
-const SUGGESTION_TRIGGER_WINDOW = MOOD_HISTORY_SIZE
+// How far back a suggestion's trigger message may be before the card is retired.
+//
+// Wider than MOOD_HISTORY_SIZE on purpose. The AI takes 5-6s to write a tone correction and 9-12s a
+// date course, and an active conversation moves several messages in that time — measured against a
+// six-message window, a date course triggered by the message that asked for it was already out of
+// range by the time it arrived, so the card was retired before it had ever been shown.
+const SUGGESTION_TRIGGER_WINDOW = 15
+
+// And a result that has only just been generated is always current regardless of how far its
+// trigger has scrolled. This is the clause that actually holds during fast back-and-forth: the
+// window alone cannot outrun people typing faster than the worker can answer.
+const SUGGESTION_FRESH_MS = 120_000
 
 const SUGGESTION_DATE_KEYWORDS = ['데이트', '코스', '어디', '장소', '놀러', '여행', '만나']
 const SUGGESTION_VIDEO_KEYWORDS = ['영상', '유튜브', '영화', '유튭']
@@ -578,7 +586,7 @@ function App() {
   // one of those is replaced by the server's answer. See isBackendConfigured in src/api.js.
   const backendLive = isBackendConfigured()
   const [serverThread, setServerThread] = useState({ state: null, stateText: null })
-  const [serverSuggestion, setServerSuggestion] = useState({ type: null, props: null, triggerMessageIds: null })
+  const [serverSuggestion, setServerSuggestion] = useState({ type: null, props: null, triggerMessageIds: null, createdAt: null })
   const lastMessageIdRef = useRef(null)
   const lastResultIdRef = useRef(null)
   // Lets handleSend jump the polling queue instead of waiting out the current delay — the moment
@@ -664,6 +672,7 @@ function App() {
         // it — see suggestionIsCurrent below. Unlike emotion analyses, AI results carry no
         // expiresAt, so nothing else would ever take an old one off the screen.
         triggerMessageIds: newest.triggerMessageIds ?? null,
+        createdAt: newest.createdAt ? new Date(newest.createdAt).getTime() : null,
       })
     }
 
@@ -776,7 +785,8 @@ function App() {
   const recentMessageIds = new Set(messages.slice(-SUGGESTION_TRIGGER_WINDOW).map((message) => message.id))
   const suggestionIsCurrent =
     !serverSuggestion.triggerMessageIds?.length ||
-    serverSuggestion.triggerMessageIds.some((id) => recentMessageIds.has(id))
+    serverSuggestion.triggerMessageIds.some((id) => recentMessageIds.has(id)) ||
+    (serverSuggestion.createdAt !== null && Date.now() - serverSuggestion.createdAt < SUGGESTION_FRESH_MS)
 
   function handleSend() {
     const text = inputValue.trim()
