@@ -2,6 +2,17 @@
 @import url('https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@500;600;700&display=swap');
 @import "tailwindcss";
 
+/* Free-for-commercial-use handwritten Korean font (메모먼트 꾹꾹체, noonnu.cc) — the thread's small
+   captions/quote marks/notes are set in this in the Figma designs. Self-hosted (not a CDN import)
+   per its license, which permits use but not redistributing/rehosting the font files elsewhere. */
+@font-face {
+  font-family: 'MemomentKkukkukk';
+  src: url('./assets/fonts/MemomentKkukkukk.woff2') format('woff2');
+  font-weight: normal;
+  font-style: normal;
+  font-display: swap;
+}
+
 html,
 body {
   margin: 0;
@@ -11,7 +22,7 @@ body {
 
 .chat-scroll {
   scrollbar-width: thin;
-  scrollbar-color: #f3b6c2 rgba(144, 113, 119, 0.08);
+  scrollbar-color: transparent transparent;
 }
 
 .chat-scroll::-webkit-scrollbar {
@@ -19,19 +30,12 @@ body {
 }
 
 .chat-scroll::-webkit-scrollbar-track {
-  background: linear-gradient(to bottom, rgba(255, 214, 224, 0.03) 20.192%, rgba(255, 230, 236, 0) 100%);
-  border-radius: 9999px;
+  background: transparent;
 }
 
 .chat-scroll::-webkit-scrollbar-thumb {
-  background-color: #f3b6c2;
+  background-color: transparent;
   border-radius: 9999px;
-  border: 1px solid rgba(255, 255, 255, 0.6);
-  background-clip: padding-box;
-}
-
-.chat-scroll::-webkit-scrollbar-thumb:hover {
-  background-color: #e8a1b0;
 }
 
 @keyframes avatar-glow-pulse {
@@ -97,27 +101,40 @@ body {
   transform-origin: center;
 }
 
-/* A slow rock + slight squeeze/stretch for the tangled-state knot overlay (see ThreadLine's tangled
-   branch) — reads as the knot straining against itself rather than sitting inert. Applied to an
-   inner element so it doesn't fight with the outer wrapper's own centering transform. */
+/* A "쭈글쭈글" (wrinkly/shriveling) squirm for the tangled-state knot overlay (see ThreadLine's
+   tangled branch) — many uneven, alternating-axis scale/rotate steps rather than one smooth back-
+   and-forth rock, so it reads as the knot crumpling in on itself instead of gently swaying. Applied
+   to an inner element so it doesn't fight with the outer wrapper's own centering transform. */
 @keyframes knot-strain {
   0%,
   100% {
-    transform: rotate(0deg) scale(1);
+    transform: scale(1, 1) rotate(0deg);
   }
-  25% {
-    transform: rotate(-4deg) scale(1.04, 0.97);
+  10% {
+    transform: scale(0.93, 1.06) rotate(-3deg);
   }
-  50% {
-    transform: rotate(0deg) scale(0.97, 1.03);
+  22% {
+    transform: scale(1.07, 0.91) rotate(2deg);
   }
-  75% {
-    transform: rotate(4deg) scale(1.04, 0.97);
+  35% {
+    transform: scale(0.9, 1.09) rotate(-4deg);
+  }
+  48% {
+    transform: scale(1.08, 0.89) rotate(3deg);
+  }
+  61% {
+    transform: scale(0.92, 1.07) rotate(-2deg);
+  }
+  74% {
+    transform: scale(1.06, 0.93) rotate(4deg);
+  }
+  87% {
+    transform: scale(0.96, 1.03) rotate(-1deg);
   }
 }
 
 .knot-strain {
-  animation: knot-strain 2.4s ease-in-out infinite;
+  animation: knot-strain 2.2s ease-in-out infinite;
   transform-origin: center;
 }
 

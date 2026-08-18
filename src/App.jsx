@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import arrowUpIcon from './assets/icons/arrow-up.svg'
+import speechBubbleIcon from './assets/icons/speech-bubble.svg'
+import avatarBlue from './assets/avatars/avatar-blue.png'
+import avatarPink from './assets/avatars/avatar-pink.png'
 
 function formatTimeKorean(date) {
   const hours = date.getHours()
@@ -80,20 +83,14 @@ async function classifyConversation(messages) {
   const recent = messages.slice(-MOOD_HISTORY_SIZE)
   let threadState = null
   let suggestionType = null
-  let tenseTrigger = null
 
   for (let i = recent.length - 1; i >= 0; i--) {
     const message = recent[i]
     const topic = messageTopic(message.text)
 
     // Tense is the one topic that reacts to either side of the conversation — an aggressive reply
-    // should tense the thread too — so it's resolved before the `mine`-only guard below. `mine`
-    // decides which way the tense ThreadLine's burst travels (see its use in App()): my own
-    // aggressive message crosses from my avatar to theirs, and one from them crosses back.
-    if (topic === 'tense') {
-      if (!tenseTrigger) tenseTrigger = { id: message.id, mine: message.mine }
-      if (!threadState) threadState = 'tense'
-    }
+    // should tense the thread too — so it's resolved before the `mine`-only guard below.
+    if (topic === 'tense' && !threadState) threadState = 'tense'
     if (!message.mine) continue
 
     // love/happy(date)/tangled(video) reflect the user's own tone/interest, so — unlike tense —
@@ -112,7 +109,6 @@ async function classifyConversation(messages) {
 
   return {
     threadState: threadState ?? 'neutral',
-    tenseTrigger,
     suggestionType: suggestionType ?? 'toneCorrection',
   }
 }
@@ -137,7 +133,7 @@ const THREAD_FEELING_TEXT = {
   love: '다정해 보여요',
   tangled: '서운해 보여요',
   happy: '신나 보여요',
-  tense: '감정이 올라와요',
+  tense: '감정이 올라왔어요',
 }
 
 // The bold summary line only makes sense alongside a thread state that actually has a matching
@@ -167,47 +163,31 @@ function buildWavePath(phaseOffset) {
 }
 const WAVE_PATHS = Array.from({ length: WAVE_STEP_COUNT + 1 }, (_, i) => buildWavePath((i / WAVE_STEP_COUNT) * WAVE_PERIOD))
 
-// Matches the user-provided reference: a tight, sharp, roughly symmetric double-spike zigzag (near
-// -equal peak heights, not the deliberately irregular "삐죽삐죽" heights from an earlier iteration)
-// bracketed by small approach/settle wiggles, its center offset from a flat baseline on both sides.
-// Per the "격한 말이 상대에게 넘어가는" spec, the burst doesn't sit still and tremble — it travels the
-// thread from the sender's side to the other person's, so `buildTenseBurstPath` re-centers the same
-// burst shape at a given x and animating through a sequence of x's (see buildTensePaths) is what
-// makes it read as crossing over rather than pulsing in place.
+// A tight, sharp zigzag bracketed by small approach/settle wiggles, its center offset from a flat
+// baseline on both sides. Peak/valley heights are deliberately uneven (not a clean double-spike of
+// matching amplitude) — an even, metronome-like burst reads as too controlled for "감정이 격해진"
+// agitation; irregular heights read as more chaotic. Unlike a one-shot reaction to a single message,
+// this loops continuously (see its use in ThreadLine below) so the tense mood reads as ongoing
+// agitation for as long as the thread stays tense, not a burst that fires once and goes still.
 const TENSE_BURST = [
   [0, 14],
   [3, 14],
-  [4.5, 17],
-  [6, 14],
-  [7, 2],
-  [8.5, 26],
-  [10, 2],
-  [11.5, 26],
-  [13, 14],
-  [14.5, 11],
+  [4.5, 18],
+  [6, 10],
+  [7, 25],
+  [8.5, 3],
+  [10, 20],
+  [11.5, 7],
+  [13, 16],
+  [14.5, 12],
   [16, 14],
   [20, 14],
 ]
-// One-shot, not a loop: a new tense-triggering message is meant to read as a single burst crossing
-// over, not a standing animation that plays forever while the mood merely stays "tense" — see
-// tenseTrigger in App(), which re-keys this path so it replays once per new aggressive message
-// rather than continuously. Flat bookend frames at both ends make it ease out of and back into the
-// idle flat line instead of popping in/out of the burst shape.
 const TENSE_STEP_COUNT = 7
 const TENSE_FLAT_PATH = 'M0 14 L100 14'
 // centerX runs 8 (burst sitting inside the left avatar's own footprint, ~0-17 of the 100-wide
 // viewBox) to 92 (inside the right avatar's) so the burst visibly emerges from one profile picture
-// and arrives at the other's, instead of just crossing the middle stretch between them. `reversed`
-// flips which avatar it starts/ends at: an aggressive message of mine crosses left (me) → right
-// (them); an aggressive reply from them crosses right (them) → left (me) — see its use in
-// ThreadLine, driven by tenseTrigger.mine in App().
-function buildTensePaths(reversed) {
-  const steps = Array.from({ length: TENSE_STEP_COUNT + 1 }, (_, i) => {
-    const t = i / TENSE_STEP_COUNT
-    return buildTenseBurstPath(8 + (reversed ? 1 - t : t) * 84)
-  })
-  return [TENSE_FLAT_PATH, ...steps, TENSE_FLAT_PATH]
-}
+// and arrives at the other's, instead of just crossing the middle stretch between them.
 function buildTenseBurstPath(centerX) {
   const points = TENSE_BURST.map(([dx, y]) => [centerX - 10 + dx, y])
   const first = points[0]
@@ -217,42 +197,11 @@ function buildTenseBurstPath(centerX) {
     .join(' ')
   return `M0 14 L${first[0]} ${first[1]} ${middle} L100 14`
 }
-
-// Chromium doesn't reliably auto-(re)start a `repeatCount="1"` <animate> just because a fresh
-// element with new `values` was inserted — after the first burst ever plays in the document, later
-// ones silently no-op (the `d` attribute updates but never animates). `begin="indefinite"` opts out
-// of the unreliable implicit auto-start entirely, and the effect below explicitly calls
-// `beginElement()` on every new tenseTrigger — which reliably (re)starts it regardless of how many
-// times it's already played.
-function TenseThreadLine({ tenseTrigger }) {
-  const animateRef = useRef(null)
-  const reversed = tenseTrigger ? !tenseTrigger.mine : false
-
-  useEffect(() => {
-    if (tenseTrigger) animateRef.current?.beginElement()
-  }, [tenseTrigger?.id])
-
-  return (
-    <svg
-      className="absolute inset-x-0 top-1/2 h-[28px] w-full -translate-y-1/2"
-      viewBox="0 0 100 28"
-      preserveAspectRatio="none"
-      fill="none"
-    >
-      <path filter="url(#thread-crayon)" stroke="#f25597" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d={TENSE_FLAT_PATH}>
-        <animate
-          ref={animateRef}
-          attributeName="d"
-          values={buildTensePaths(reversed).join(';')}
-          dur="4.5s"
-          begin="indefinite"
-          repeatCount="1"
-          calcMode="linear"
-        />
-      </path>
-    </svg>
-  )
-}
+const TENSE_PATHS = [
+  TENSE_FLAT_PATH,
+  ...Array.from({ length: TENSE_STEP_COUNT + 1 }, (_, i) => buildTenseBurstPath(8 + (i / TENSE_STEP_COUNT) * 84)),
+  TENSE_FLAT_PATH,
+]
 
 // Roughens an otherwise-clean stroke into a crayon/marker-like line — displacing the path through
 // fractal noise instead of drawing a perfectly smooth vector. Defined once (see its use in App())
@@ -277,8 +226,23 @@ function ThreadCrayonFilter() {
   )
 }
 
-function ThreadLine({ mood, tenseTrigger }) {
-  if (mood === 'tense') return <TenseThreadLine tenseTrigger={tenseTrigger} />
+function ThreadLine({ mood }) {
+  if (mood === 'tense') {
+    // Loops via repeatCount="indefinite" instead of firing once per aggressive message — the tense
+    // mood itself should read as continuously agitated for as long as the thread stays tense.
+    return (
+      <svg
+        className="absolute inset-x-0 top-1/2 h-[28px] w-full -translate-y-1/2"
+        viewBox="0 0 100 28"
+        preserveAspectRatio="none"
+        fill="none"
+      >
+        <path filter="url(#thread-crayon)" stroke="#f25597" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" d={TENSE_PATHS[0]}>
+          <animate attributeName="d" values={TENSE_PATHS.join(';')} dur="3.2s" repeatCount="indefinite" calcMode="linear" />
+        </path>
+      </svg>
+    )
+  }
 
   if (mood === 'happy') {
     // Matches Figma 593:2214 — a continuous multi-hump sound wave whose crests visibly travel
@@ -325,10 +289,10 @@ function ThreadLine({ mood, tenseTrigger }) {
           <path filter="url(#thread-crayon)" d="M0 8 L44 8" stroke="#f25597" strokeWidth="2" strokeLinecap="round" />
           <path filter="url(#thread-crayon)" d="M56 8 L100 8" stroke="#f25597" strokeWidth="2" strokeLinecap="round" />
         </svg>
-        {/* viewBox height grew from 24 to 26, and the container's from 30px to 32.5px, to fit the
-            tip now hanging below the tail line (24 vs the tails' 21) without clipping — `top`
-            stays the same -0.25px since that's anchored to the tails' y (still 21), not the tip. */}
-        <svg className="heart-pulse absolute left-[128px] top-[-0.25px] h-[32.5px] w-[45px]" viewBox="0 0 36 26" fill="none">
+        {/* Percentage left/width, not fixed px — the container is now a responsive-width row (see the
+            app's viewport conversion), so a hardcoded px offset drifts out of alignment with the gap
+            left in the percentage-based main line above as the screen width changes. */}
+        <svg className="heart-pulse absolute left-[42.52%] top-[-0.25px] h-[32.5px] w-[14.95%]" viewBox="0 0 36 26" fill="none">
           <path
             filter="url(#thread-crayon)"
             d="M0,21 L4,21 L18,24 C13,19 7,14 7,8 C7,4 10.5,2 14,2 C16,2 18,4 18,7 C18,4 20,2 22,2 C25.5,2 29,4 29,8 C29,14 23,19 18,24 L32,21 L36,21"
@@ -393,19 +357,22 @@ function ThreadLine({ mood, tenseTrigger }) {
   )
 }
 
-// KakaoTalk-style default profile — a plain silhouette on a solid color, no photo. `glow` (see
-// THREAD_GLOW_COLORS) renders a soft colored halo behind it that changes with the thread state and
-// pulses (see .avatar-glow in index.css) like a light flickering on/off, rather than sitting as a
-// static blur; null/undefined leaves the avatar plain.
-function DefaultAvatar({ glow }) {
+// Default profile photo — the user's own placeholder artwork, recolored per side (see
+// AVATAR_IMAGES) instead of hand-drawn, so the two participants read as a couple (blue/pink) rather
+// than two identical gray silhouettes. `glow` (see THREAD_GLOW_COLORS) renders a soft colored halo
+// behind it that changes with the thread state and pulses (see .avatar-glow in index.css) like a
+// light flickering on/off, rather than sitting as a static blur; null/undefined leaves it plain.
+const AVATAR_IMAGES = {
+  blue: avatarBlue,
+  pink: avatarPink,
+}
+
+function DefaultAvatar({ glow, side = 'blue' }) {
   return (
     <div className="relative z-10 flex size-[52px] shrink-0 items-center justify-center">
       {glow && <div className="avatar-glow absolute inset-[-3px] rounded-full blur-[5px]" style={{ backgroundColor: glow }} />}
-      <div className="relative flex size-[52px] items-center justify-center overflow-hidden rounded-full border-2 border-white bg-[#d9d9d9] shadow-[0_2px_8px_rgba(0,0,0,0.15)]">
-        <svg width="30" height="30" viewBox="0 0 30 30" fill="none">
-          <circle cx="15" cy="11" r="6" fill="white" fillOpacity="0.95" />
-          <path d="M2 29c0-8 5.8-12.5 13-12.5S28 21 28 29" fill="white" fillOpacity="0.95" />
-        </svg>
+      <div className="relative flex size-[52px] items-center justify-center overflow-hidden rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.15)]">
+        <img src={AVATAR_IMAGES[side]} alt="" className="size-full object-cover" />
       </div>
     </div>
   )
@@ -431,23 +398,28 @@ function VideoCard({
   note = '연락 문제로 속상할 때 어떻게 상대의 진짜 마음을 확인하고 대화할지 구체적인 방법을 알려줘요',
 }) {
   return (
-    <div className="mx-auto flex w-[305px] flex-col items-center">
-      <div className="h-px w-full bg-[#f4e0e5]" />
+    // Same fill-the-panel approach as DateCourseCard: h-full + a flex-grow spacer on each side of
+    // the trailing note center it between the video card and the zone's bottom edge, in whatever
+    // space is left, instead of a fixed margin that leaves dead space on a taller screen.
+    <div className="mx-auto flex h-full w-full flex-col items-center">
+      <div className="h-[1.2px] w-[calc(100%-70px)] shrink-0 bg-[#a6868e]/50" />
 
       <a
         href={youtubeWatchUrl(videoId)}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-[10px] block w-full cursor-pointer overflow-hidden rounded-[16px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
+        className="mt-[10px] block w-[calc(100%-70px)] shrink-0 cursor-pointer overflow-hidden rounded-[20px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
       >
-        <img src={youtubeThumbnailUrl(videoId)} alt="" className="mx-auto mt-[8px] h-[112px] w-[266px] rounded-[10px] object-cover" />
-        <div className="px-3 pb-[8px] pt-[14px]">
-          <p className="truncate text-[12px] font-semibold text-black">{title}</p>
-          <p className="mt-[2px] truncate text-[10px] font-medium text-black/50">{channel}</p>
+        <img src={youtubeThumbnailUrl(videoId)} alt="" className="h-[112px] w-full object-cover" />
+        <div className="px-3 pb-[8px] pt-[10px]">
+          <p className="truncate text-[13px] font-semibold text-black">{title}</p>
+          <p className="mt-[2px] truncate text-[11px] font-medium text-black/50">{channel}</p>
         </div>
       </a>
 
-      <p className="mt-[10px] whitespace-pre-wrap px-2 text-center text-[14px] leading-[18px] text-[#7d6a71]">{note}</p>
+      <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
+      <p className="w-[calc(100%-70px)] shrink-0 whitespace-pre-wrap text-center font-['MemomentKkukkukk'] text-[16px] leading-[24px] tracking-[0.16px] text-[#7d6a71]">{note}</p>
+      <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
     </div>
   )
 }
@@ -459,18 +431,16 @@ function kakaoMapSearchUrl(query) {
   return `https://map.kakao.com/link/search/${encodeURIComponent(query)}`
 }
 
-// Fixed h-44 + truncated single-line text (not whitespace-pre-wrap) so the card's size/shape never
-// shifts once the AI worker starts filling in real place names/descriptions of varying length —
-// only the text content changes, not the layout. Height (and the gaps in DateCourseCard around it)
-// are tuned tight so 3 of these plus the closing note fit inside the 50% reveal zone without the
-// panel needing to scroll internally.
+// Fixed h-52 (Figma 709:2538) + truncated single-line text (not whitespace-pre-wrap) so the card's
+// size/shape never shifts once the AI worker starts filling in real place names/descriptions of
+// varying length — only the text content changes, not the layout.
 function PlaceCard({ name, description }) {
   return (
     <a
       href={kakaoMapSearchUrl(name)}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex h-[44px] w-full shrink-0 cursor-pointer flex-col items-center justify-center gap-[2px] rounded-[15px] border-[3px] border-[#f4e0e5] bg-white/60 px-4 shadow-[0_3px_4px_rgba(43,43,43,0.25)] transition-transform duration-[120ms] ease-out hover:scale-[1.015] active:scale-[0.98]"
+      className="flex h-[52px] w-full shrink-0 cursor-pointer flex-col items-center justify-center gap-[2px] rounded-[15px] border-2 border-[#f4e0e5] bg-white/80 px-4 shadow-[0_3px_4px_#ffcfdb] transition-transform duration-[120ms] ease-out hover:scale-[1.015] active:scale-[0.98]"
     >
       <p className="w-full truncate text-center text-[14px] font-semibold leading-[18px] text-[#562f3e]">{name}</p>
       <p className="w-full truncate text-center text-[11px] tracking-[0.11px] text-[#7d6a71]">{description}</p>
@@ -478,11 +448,12 @@ function PlaceCard({ name, description }) {
   )
 }
 
-// "데이트 코스 추천" expanded-sheet state. `places`/`note` come from an AI worker, so place count
-// and text length can vary — the spacing below is tuned for the default 3-place/1-line-note case to
-// fit the shared 50% reveal zone with no internal scroll (see SUGGESTION_ZONE_HEIGHT); a worker
-// response with noticeably more content would still fall back to scrolling. The summary line renders
-// in the shared mood-card above (see DATE_COURSE_STATUS in App()), not duplicated here.
+// "데이트 코스 추천" expanded-sheet state, spacing matched to Figma 709:2538 (divider→cards 15px,
+// cards h-52 with a 10px gap between them, cards→note 21px). `places`/`note` come from an AI
+// worker, so place count and text length can vary — a response with noticeably more content than
+// the default 3-place/1-line-note case would fall back to scrolling (see SUGGESTION_ZONE_PERCENTS).
+// The summary line renders in the shared mood-card above (see DATE_COURSE_STATUS in App()), not
+// duplicated here.
 function DateCourseCard({
   places = [
     { name: '롯데시네마 월드타워', description: '서울 송파구 올림픽로의 영화관' },
@@ -492,17 +463,29 @@ function DateCourseCard({
   note = '롯데월드 가고 싶다고 하신 주말 계획을 반영했어요',
 }) {
   return (
-    <div className="mx-auto flex w-[305px] flex-col items-center">
-      <div className="h-px w-full bg-[#f4e0e5]" />
+    // h-full + the flex-1 group below let the panel's actual available height (divider → the
+    // bottom of the scroll zone, which varies with viewport/percent-vs-floor sizing) drive the
+    // gaps directly via flex-grow spacers, not fixed px margins that would leave dead space on any
+    // screen taller than the tuned minimum. Card→card spacers use a smaller grow value than the
+    // two spacers straddling the note, so cards sit closer together while the note lands exactly
+    // centered between the last card and the zone's bottom edge, in whatever space is left.
+    <div className="mx-auto flex h-full w-full flex-col items-center">
+      {/* The shared expand-zone scroll container already has its own 10px side padding — these
+          calc() widths subtract that out so the FINAL visible margin from the sheet edge lands
+          exactly on the requested 45px / 32px / 38px, not 10px more than that. */}
+      <div className="h-[1.2px] w-[calc(100%-70px)] shrink-0 bg-[#a6868e]/50" />
 
-      <div className="mt-[8px] flex w-full flex-col gap-[10px]">
-        {places.map((place, i) => (
-          <PlaceCard key={i} name={place.name} description={place.description} />
-        ))}
-      </div>
-
-      <div className="mt-[10px] w-full px-[24px]">
-        <p className="whitespace-pre-wrap text-center text-[13px] leading-[16px] tracking-[0.13px] text-[#7d6a71]">{note}</p>
+      <div className="mt-[15px] flex w-full flex-1 flex-col items-center">
+        {places.flatMap((place, i) => [
+          <div key={`card-${i}`} className="w-[calc(100%-44px)] shrink-0">
+            <PlaceCard name={place.name} description={place.description} />
+          </div>,
+          <div key={`gap-${i}`} aria-hidden="true" style={{ flexGrow: i === places.length - 1 ? 1.7 : 0.6 }} />,
+        ])}
+        <div className="w-[calc(100%-56px)] shrink-0">
+          <p className="whitespace-pre-wrap text-center font-['MemomentKkukkukk'] text-[16px] leading-[19px] tracking-[0.13px] text-[#7d6a71]">{note}</p>
+        </div>
+        <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
       </div>
     </div>
   )
@@ -517,18 +500,26 @@ function ToneCorrectionCard({
   reason = "'돼지같은 소리'라는 표현이 공격적으로 들릴 수 있어요.",
 }) {
   return (
-    <div className="mx-auto flex w-[305px] flex-col items-center">
-      <div className="h-px w-full bg-[#f4e0e5]" />
+    // Same fill-the-panel approach as DateCourseCard: h-full + a flex-grow spacer on each side of
+    // the trailing reason text center it between the quote box and the zone's bottom edge, in
+    // whatever space is left, instead of a fixed margin that leaves dead space on a taller screen.
+    <div className="mx-auto flex h-full w-full flex-col items-center">
+      <div className="h-[1.2px] w-[calc(100%-70px)] shrink-0 bg-[#a6868e]/50" />
 
-      <p className="mt-[12px] text-center text-[17px] font-bold tracking-[0.17px] text-[#7d6a71]">대신 이렇게 말해보세요!</p>
-
-      <div className="relative mt-[10px] w-full rounded-[29px] border-[3px] border-[#f4e0e5] bg-white/60 px-5 py-6 shadow-[0_3px_4px_rgba(43,43,43,0.25)]">
-        <span className="absolute left-3 top-[-14px] rotate-180 text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
-        <span className="absolute right-3 top-[-14px] text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
-        <p className="whitespace-pre-wrap text-center text-[14.5px] font-semibold leading-[19px] tracking-[0.145px] text-[#562f3e]">{suggestion}</p>
+      <div className="mt-[12px] flex shrink-0 items-center gap-[3px]">
+        <p className="text-center text-[14px] font-semibold tracking-[0.14px] text-[#7d6a71]">대신 이렇게 말해보세요!</p>
+        <img src={speechBubbleIcon} alt="" className="size-[14px]" />
       </div>
 
-      <p className="mt-[12px] whitespace-pre-wrap px-2 text-center text-[16px] leading-[19px] tracking-[0.16px] text-[#7d6a71]">{reason}</p>
+      <div className="relative mt-[10px] w-[calc(100%-70px)] shrink-0 rounded-[29px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-6 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
+        <span className="absolute left-3 top-2 rotate-180 font-['MemomentKkukkukk'] text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
+        <span className="absolute right-3 top-2 font-['MemomentKkukkukk'] text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
+        <p className="whitespace-pre-wrap px-3 text-center text-[14px] font-semibold leading-[19px] tracking-[0.145px] text-[#562f3e]">{suggestion}</p>
+      </div>
+
+      <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
+      <p className="w-full shrink-0 whitespace-pre-wrap px-2 text-center font-['MemomentKkukkukk'] text-[16px] leading-[19px] tracking-[0.16px] text-[#7d6a71]">{reason}</p>
+      <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
     </div>
   )
 }
@@ -626,12 +617,14 @@ function ChatBubbleRow({ text, mine, time, isFirstInRun, isLastInRun }) {
       ? 'rounded-tl-[22px] rounded-tr-[22px] rounded-bl-[9px] rounded-br-[22px]'
       : 'rounded-[22px]'
 
+  // Figma (node 709:2576/2601/2626) specs received bubbles as SemiBold and sent bubbles as
+  // Medium — a real weight difference, not just an accident of which side happens to render first.
   const bubbleAppearance = mine
-    ? 'border border-[#e3d7f8]/60 bg-white/50 text-[#23302f] shadow-[0_2px_8px_rgba(92,62,98,0.1)]'
-    : 'border border-[#e3d7f8] bg-[#fefefe] text-[#23302f] shadow-[0_2px_8px_rgba(92,62,98,0.08)]'
+    ? 'border border-[#e3d7f8]/60 bg-white/50 text-[#23302f] shadow-[0_2px_8px_rgba(92,62,98,0.1)] font-medium'
+    : 'border border-[#e3d7f8] bg-[#fefefe] text-[#23302f] shadow-[0_2px_8px_rgba(92,62,98,0.08)] font-semibold'
 
   const timeLabel = isLastInRun ? (
-    <span className="shrink-0 pb-0.5 font-['Instrument_Sans',sans-serif] text-[10px] text-[#907177]">
+    <span className="shrink-0 pb-0.5 font-['MemomentKkukkukk'] text-[11.4px] text-[#907177]">
       {formatTimeKorean(time)}
     </span>
   ) : null
@@ -639,7 +632,7 @@ function ChatBubbleRow({ text, mine, time, isFirstInRun, isLastInRun }) {
   return (
     <div className={`flex items-end gap-1.5 ${mine ? 'justify-end' : 'justify-start'}`}>
       {mine && timeLabel}
-      <div className={`max-w-[70%] px-[15px] py-[8px] text-[15px] font-medium ${bubbleAppearance} ${corner}`}>
+      <div className={`max-w-[70%] px-[15px] py-[8px] text-[15px] ${bubbleAppearance} ${corner}`}>
         <span className="whitespace-pre-wrap break-words">{text}</span>
       </div>
       {!mine && timeLabel}
@@ -666,18 +659,28 @@ const TYPING_REPLY_DELAY_MS = 1500
 const STATUS_BAR_HEIGHT = 40
 const HEADER_HEIGHT = 135 // gap-8 + mood card (pt-16 + avatar row-52 + gap-10 + text-35 + pb-6 = 119) + gap-8
 const INPUT_BAR_HEIGHT = 80 // pt-[8px] + h-[52px] + pb-[20px]
-const FRAME_HEIGHT = 812
-const FRAME_WIDTH = 375
-// The suggestion panel's open height, as a fraction of the frame's total height (status bar +
-// header included). Tone-correction and date-course both fit within the standard 50% reveal —
-// DateCourseCard's own spacing is tuned to fit its 3 place cards + closing note in that height
-// without needing to scroll internally; video opens a bit taller at 55%.
-const SUGGESTION_ZONE_HEIGHT = Math.round(FRAME_HEIGHT * 0.5) - STATUS_BAR_HEIGHT - HEADER_HEIGHT
-const VIDEO_ZONE_HEIGHT = Math.round(FRAME_HEIGHT * 0.55) - STATUS_BAR_HEIGHT - HEADER_HEIGHT
-const SUGGESTION_ZONE_HEIGHTS = {
-  toneCorrection: SUGGESTION_ZONE_HEIGHT,
-  dateCourse: SUGGESTION_ZONE_HEIGHT,
-  video: VIDEO_ZONE_HEIGHT,
+const HEADER_FOOTPRINT_PX = STATUS_BAR_HEIGHT + HEADER_HEIGHT
+// The suggestion panel's open height, as a percentage of the frame's own (now viewport-driven, not
+// fixed) height — so it scales with whatever screen the app is actually running on instead of a
+// single hardcoded design size. Tone-correction and date-course both fit within the standard 50%
+// reveal — DateCourseCard's own spacing is tuned to fit its 3 place cards + closing note in that
+// height (at typical phone-portrait proportions) without needing to scroll internally; video opens
+// a bit taller at 55%.
+const SUGGESTION_ZONE_PERCENTS = {
+  toneCorrection: 50,
+  dateCourse: 50,
+  video: 55,
+}
+// Pixel floor for the revealed panel (not the whole sheet) — a pure percentage looks right on a
+// normal phone-height screen, but on a short one (landscape, a small browser window) that same
+// percentage can end up smaller than the tuned content, bringing back the internal scrollbar this
+// was specifically tuned to avoid. `max(percent, minPx)` in sheetHeightValue keeps the percentage
+// on tall screens and only floors it on short ones, so the panel's content never has to scroll —
+// these numbers are the measured content height of each card plus a few px of margin.
+const SUGGESTION_ZONE_MIN_PX = {
+  toneCorrection: 230,
+  dateCourse: 270,
+  video: 270,
 }
 
 function App() {
@@ -687,16 +690,6 @@ function App() {
   const [isOtherTyping, setIsOtherTyping] = useState(false)
   const bottomRef = useRef(null)
   const replyTimeoutIdsRef = useRef([])
-  const [scale, setScale] = useState(1)
-
-  useEffect(() => {
-    function updateScale() {
-      setScale(Math.min(1, window.innerHeight / FRAME_HEIGHT, window.innerWidth / FRAME_WIDTH))
-    }
-    updateScale()
-    window.addEventListener('resize', updateScale)
-    return () => window.removeEventListener('resize', updateScale)
-  }, [])
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ block: 'end' })
@@ -709,11 +702,10 @@ function App() {
   const hasMessages = messages.length > 0
 
   // Result of classifyConversation (see its definition for why this is async-shaped already) — the
-  // thread's mood, which suggestion screen to show, and what triggered the tense burst all come
-  // from one call over the current messages. `cancelled` guards against a stale, slower-to-resolve
-  // call from an earlier `messages` value clobbering a newer one once this becomes a real network
-  // call with variable latency.
-  const [classification, setClassification] = useState({ threadState: 'neutral', tenseTrigger: null, suggestionType: 'toneCorrection' })
+  // thread's mood and which suggestion screen to show both come from one call over the current
+  // messages. `cancelled` guards against a stale, slower-to-resolve call from an earlier `messages`
+  // value clobbering a newer one once this becomes a real network call with variable latency.
+  const [classification, setClassification] = useState({ threadState: 'neutral', suggestionType: 'toneCorrection' })
   useEffect(() => {
     let cancelled = false
     classifyConversation(messages).then((result) => {
@@ -723,7 +715,7 @@ function App() {
       cancelled = true
     }
   }, [messages])
-  const { threadState, tenseTrigger, suggestionType } = classification
+  const { threadState, suggestionType } = classification
 
   function handleSend() {
     const text = inputValue.trim()
@@ -753,28 +745,29 @@ function App() {
     setIsSheetOpen((open) => !open)
   }
 
-  const currentExpandPx = isSheetOpen ? SUGGESTION_ZONE_HEIGHTS[suggestionType] : 0
+  const currentExpandPercent = isSheetOpen ? SUGGESTION_ZONE_PERCENTS[suggestionType] : 0
   const SuggestionCard = SUGGESTION_SCREENS[suggestionType]
-
-  // Message list and input bar keep their full natural size at all times — the sheet is a
-  // translucent, blurred overlay that floats above them as it grows, rather than shrinking them.
-  const remainingPx = FRAME_HEIGHT - STATUS_BAR_HEIGHT - HEADER_HEIGHT
-  const inputBarHeight = INPUT_BAR_HEIGHT
-  const messageAreaHeight = remainingPx - inputBarHeight
   const sizeTransition = 'height 300ms ease-out'
+  // The sheet's TOTAL height (status bar + header + revealed panel) when open, e.g. "50%" of the
+  // frame — not the header footprint plus another 50% on top of it. `max()` with the panel's pixel
+  // floor (see SUGGESTION_ZONE_MIN_PX) keeps it at that percentage on a normal-height screen, but
+  // stops it from shrinking below what the card actually needs on a short one — so the panel never
+  // needs to scroll internally regardless of screen size. Closed, it's just the fixed header
+  // footprint.
+  const sheetHeightValue = isSheetOpen
+    ? `max(${currentExpandPercent}%, ${HEADER_FOOTPRINT_PX + SUGGESTION_ZONE_MIN_PX[suggestionType]}px)`
+    : `${HEADER_FOOTPRINT_PX}px`
 
   return (
-    <div className="flex h-screen items-center justify-center overflow-hidden bg-[#fff5f7]">
-      <div style={{ width: FRAME_WIDTH * scale, height: FRAME_HEIGHT * scale }}>
-        <div
-          style={{ width: FRAME_WIDTH, height: FRAME_HEIGHT, transform: `scale(${scale})`, transformOrigin: 'top left' }}
-          className="relative overflow-hidden bg-gradient-to-b from-[#fff6fa] to-[#ffa3c6]"
-        >
+    <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+      <div className="relative h-full w-full max-w-[480px] overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%]">
         <ThreadCrayonFilter />
-        {/* Message list and input bar sit at their full natural size underneath the sheet at all
-            times — the sheet overlays them with blur/transparency instead of shrinking them away. */}
+        {/* Message list and input bar keep their full natural size at all times — the sheet is a
+            translucent, blurred overlay that floats above them as it grows, rather than shrinking
+            them. Positioned with top+bottom (not a JS-computed height) so it fills whatever space
+            is actually available on the current screen instead of assuming one fixed frame size. */}
         <div
-          style={{ top: `${STATUS_BAR_HEIGHT + HEADER_HEIGHT}px`, height: `${messageAreaHeight}px` }}
+          style={{ top: `${HEADER_FOOTPRINT_PX}px`, bottom: `${INPUT_BAR_HEIGHT}px` }}
           className="chat-scroll absolute left-0 right-0 overflow-y-auto px-[17px] pb-[16px] pt-[14px]"
         >
           {hasMessages && (
@@ -803,7 +796,7 @@ function App() {
         </div>
 
         <div
-          style={{ top: `${STATUS_BAR_HEIGHT + HEADER_HEIGHT + messageAreaHeight}px`, height: `${inputBarHeight}px` }}
+          style={{ bottom: 0, height: `${INPUT_BAR_HEIGHT}px` }}
           className="absolute left-0 right-0 overflow-hidden px-[12px] pb-[20px] pt-[8px]"
         >
           <div className="relative flex h-[52px] items-center gap-2 rounded-[26px] bg-white py-0 pl-[18px] pr-[8px] shadow-[0_6px_20px_rgba(232,80,125,0.16)]">
@@ -818,19 +811,20 @@ function App() {
               type="button"
               aria-label="전송"
               onClick={handleSend}
-              className="flex size-[38px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-gradient-to-br from-[#ff6e98] to-[#e8507d] shadow-[0_4px_12px_rgba(232,80,125,0.4)] transition-transform duration-[120ms] ease-out hover:scale-[1.06] active:scale-[0.92]"
+              className="flex size-[38px] shrink-0 cursor-pointer items-center justify-center rounded-full bg-[#f8e6eb] transition-transform duration-[120ms] ease-out hover:scale-[1.06] active:scale-[0.92]"
             >
-              <img src={arrowUpIcon} alt="" className="h-[17px] w-[12px] brightness-0 invert" />
+              <img src={arrowUpIcon} alt="" className="h-[17px] w-[12px]" />
             </button>
           </div>
         </div>
 
         <div
           style={{
-            height: `${STATUS_BAR_HEIGHT + HEADER_HEIGHT + currentExpandPx}px`,
+            height: sheetHeightValue,
+            background: 'linear-gradient(180deg, rgba(255, 255, 255, 0.50) 23.63%, rgba(255, 218, 227, 0.50) 100.31%)',
             transition: sizeTransition,
           }}
-          className="absolute left-[10px] right-[10px] top-0 z-10 overflow-hidden rounded-[28px] border-2 border-[#f4e0e5] bg-gradient-to-br from-[#ffd6e0]/60 to-[#ffe6ec]/60 shadow-[0_4px_20px_rgba(92,62,98,0.15)] backdrop-blur-md"
+          className="absolute left-[6px] right-[6px] top-0 z-10 overflow-hidden rounded-[28px] border-[3px] border-[#f4e0e5] shadow-[0_4px_20px_rgba(92,62,98,0.15)] backdrop-blur-md"
         >
           <StatusBar />
           {/* Header content sits directly on the sheet's own card background/border above — no
@@ -838,18 +832,18 @@ function App() {
               (matching Figma 643:2971, where only the inner quote box is separately bordered). */}
           <div className="absolute left-[17px] right-[17px] top-[48px] px-5 pt-4 pb-[6px]">
             <div className="relative -mx-[12px] flex h-[52px] items-center justify-between">
-              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} />
-              <ThreadLine mood={threadState} tenseTrigger={tenseTrigger} />
-              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} />
+              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" />
+              <ThreadLine mood={threadState} />
+              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="pink" />
             </div>
-            <div className="mt-[10px] flex h-[35px] flex-col items-center justify-center gap-[3px] text-center">
+            <div className="mt-0 flex h-[35px] flex-col items-center justify-start gap-[3px] text-center">
               {!hasMessages ? (
                 <span className="font-['Instrument_Sans',sans-serif] text-[13px] font-medium text-[#8a6f76]/70">
                   대화를 시작해보세요
                 </span>
               ) : (
                 <>
-                  <span className="font-['Instrument_Sans',sans-serif] text-[12px] tracking-[0.08em] text-[#8a6f76]/70">
+                  <span className="font-['MemomentKkukkukk'] text-[12px] tracking-[0.08em] text-[#8a6f76]/70">
                     {THREAD_FEELING_TEXT[threadState]}
                   </span>
                   {THREAD_TO_SUGGESTION[threadState] === suggestionType && (
@@ -859,14 +853,19 @@ function App() {
               )}
             </div>
           </div>
-          {hasMessages && currentExpandPx > 0 && (
+          {hasMessages && currentExpandPercent > 0 && (
             <div
               style={{
-                top: `${STATUS_BAR_HEIGHT + HEADER_HEIGHT}px`,
-                height: `${currentExpandPx}px`,
+                top: `${HEADER_FOOTPRINT_PX}px`,
+                // "100%" here means 100% of THIS element's own containing block, which is the
+                // sheet div right above (not the frame) — the sheet's own height already equals
+                // currentExpandPercent% of the frame, so "all of the sheet minus the header" is
+                // exactly the revealed panel's height. Using currentExpandPercent% directly here
+                // would compound against the sheet's height a second time and come out far short.
+                height: `calc(100% - ${HEADER_FOOTPRINT_PX}px)`,
                 transition: sizeTransition,
               }}
-              className="chat-scroll absolute left-0 right-0 overflow-y-auto px-[17px] pb-[8px] pt-0"
+              className="chat-scroll absolute left-0 right-0 overflow-y-auto px-[10px] pb-[8px] pt-0"
             >
               <SuggestionCard />
             </div>
@@ -880,24 +879,17 @@ function App() {
             aria-expanded={isSheetOpen}
             onClick={handleToggleSheet}
             style={{
-              top: `${STATUS_BAR_HEIGHT + HEADER_HEIGHT + currentExpandPx}px`,
+              top: sheetHeightValue,
               transition: 'top 300ms ease-out',
             }}
-            className="absolute left-1/2 z-20 flex size-[16px] -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center rounded-full bg-white shadow-[0_3px_10px_rgba(92,62,98,0.3)] transition-transform duration-[120ms] ease-out hover:scale-[1.08] active:scale-[0.92]"
+            // A plain drag-handle bar (matches the Figma sheet's own handle), not a circular
+            // icon-button — the padding here keeps the tap target comfortably large even though the
+            // visible bar itself is thin.
+            className="absolute left-1/2 z-20 flex -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center justify-center px-[14px] py-[10px] transition-transform duration-[120ms] ease-out hover:scale-[1.08] active:scale-[0.92]"
           >
-            <svg
-              width="7"
-              height="4.3"
-              viewBox="0 0 13 8"
-              fill="none"
-              className="transition-transform duration-300 ease-out"
-              style={{ transform: isSheetOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}
-            >
-              <path d="M1 1L6.5 6.5L12 1" stroke="#e8507d" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
+            <span className="block h-[4px] w-[43px] rounded-full bg-white/90 shadow-[0_2px_6px_rgba(92,62,98,0.25)]" />
           </button>
         )}
-        </div>
       </div>
     </div>
   )
