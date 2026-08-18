@@ -58,6 +58,14 @@ DELAY_MS = {
     "tense": 240,
 }
 
+# Per-mood upward lift, in px, applied to the ends of the thread. The amount ramps in as the square
+# of the distance from the middle, so the centre of the artwork does not move at all — on love that
+# keeps the heart exactly where it was drawn while both tails curl up. Applied before cropping, on
+# the full canvas, so the raised ends can't run out of the content box.
+END_LIFT_PX = {
+    "love": 7,
+}
+
 
 def load(path):
     img = Image.open(path)
@@ -83,6 +91,36 @@ def content_box(frames, canvas):
         max(0, bbox[0] - MARGIN), max(0, bbox[1] - MARGIN),
         min(canvas[0], bbox[2] + MARGIN), min(canvas[1], bbox[3] + MARGIN),
     )
+
+
+def lift_ends(frames, lift):
+    """Curl both ends of the thread upward by `lift` px, easing to nothing in the middle.
+
+    The horizontal span is measured once across every frame so all of them bend along the same
+    curve — measuring per frame would make the profile breathe as the artwork animates.
+    """
+    w, h = frames[0].size
+    inked = [
+        any(frame.load()[x, y][3] > 0 for frame in frames for y in range(h))
+        for x in range(w)
+    ]
+    x0, x1 = inked.index(True), w - 1 - inked[::-1].index(True)
+    centre = (x0 + x1) / 2
+    half = max(1.0, (x1 - x0) / 2)
+
+    out = []
+    for frame in frames:
+        src = frame.load()
+        lifted = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+        dst = lifted.load()
+        for x in range(w):
+            t = min(1.0, abs(x - centre) / half)
+            dy = -round(lift * t * t)
+            for y in range(h):
+                if src[x, y][3] and 0 <= y + dy < h:
+                    dst[x, y + dy] = src[x, y]
+        out.append(lifted)
+    return out
 
 
 def column_ink(frame):
@@ -191,6 +229,8 @@ os.makedirs(OUT_DIR, exist_ok=True)
 
 for filename, mood in SOURCES.items():
     canvas, delays, frames = load(filename)
+    if mood in END_LIFT_PX:
+        frames = lift_ends(frames, END_LIFT_PX[mood])
     box = content_box(frames, canvas)
     cropped = [frame.crop(box) for frame in frames]
     w, h = cropped[0].size
