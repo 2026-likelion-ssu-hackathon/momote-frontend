@@ -414,7 +414,9 @@ function ToneCorrectionCard({
         <img src={speechBubbleIcon} alt="" className="size-[14px]" />
       </div>
 
-      <div className="relative mt-[10px] w-[calc(100%-70px)] shrink-0 rounded-[29px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-6 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
+      {/* 28px, matching the sheet panel this sits inside — the two rounded boxes are nested and
+          read as one shape, so the corner curves have to agree. */}
+      <div className="relative mt-[10px] w-[calc(100%-70px)] shrink-0 rounded-[28px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-6 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
         {/* Mirrored on X only. rotate-180 flips the Y axis too, and this font's quote glyph is just
             7px of ink sitting at the very top of its 30px line box — so the flipped one landed 21px
             lower than its pair. scale-x-[-1] gives the same opening-quote shape at the same height. */}
