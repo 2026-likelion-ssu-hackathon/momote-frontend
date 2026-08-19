@@ -183,9 +183,10 @@ export function suggestionPropsFromResult(result) {
   if (suggestionType === 'toneCorrection') {
     // Observed shape:
     //   { alternativeSentence, correctionReason, situationDiagnosis, guideMessage }
-    // guideMessage ("대신 이렇게 상대방에게 말해보세요.") duplicates the card's own printed header,
-    // so it is deliberately not used — situationDiagnosis is the line the sheet shows in bold above
-    // the card, and it reads as a direct replacement for the hardcoded TONE_CORRECTION_STATUS.
+    // guideMessage ("대신 이렇게 상대방에게 말해보세요.") says the same thing as the card's own
+    // printed heading, so it is deliberately not used — the card asks the question, the payload
+    // supplies the answer. situationDiagnosis is the line the sheet shows in bold above the card,
+    // and it reads as a direct replacement for the hardcoded TONE_CORRECTION_STATUS.
     return {
       suggestion: firstOf(data, 'alternativeSentence', 'suggestion', 'suggestedText', 'correctedText'),
       reason: firstOf(data, 'correctionReason', 'reason', 'explanation'),
