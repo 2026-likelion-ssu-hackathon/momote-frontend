@@ -468,6 +468,13 @@ const SUGGESTION_STATUS = {
 const MESSAGE_POLL_MS = 1500
 const INSIGHT_POLL_EVERY = 3
 
+// Right after a message lands, the AI is actively working on it — 5-6s for a tone correction, 9-12s
+// for a date course — and that is the one stretch where the slower insight cadence is felt as the
+// card taking too long. For this long after a send or an incoming message, emotion and results are
+// fetched on every tick instead of every third, so a finished result is on screen within one poll
+// of existing rather than up to three.
+const INSIGHT_BURST_MS = 30000
+
 // A backend that is down (or a wrong room id) shouldn't be hit twice a second forever, so failures
 // back off exponentially and recover the moment one succeeds.
 const MAX_BACKOFF_MS = 30000
@@ -621,6 +628,7 @@ function App() {
         // A message we sent optimistically is now confirmed — drop the placeholder rather than
         // showing the same text twice, matched on the id the client minted for it.
         const confirmed = new Set(incoming.map((message) => message.clientMessageId).filter(Boolean))
+        if (incoming.some((message) => !message.mine)) burstUntil = Date.now() + INSIGHT_BURST_MS
         const kept = prev.filter((message) => !(message.pending && confirmed.has(message.clientMessageId)))
         return [...kept, ...incoming].sort((a, b) => a.time - b.time)
       })
@@ -679,6 +687,7 @@ function App() {
     let timerId = null
     let tick = 0
     let failures = 0
+    let burstUntil = 0
 
     // Self-scheduling rather than setInterval: a slow response must not stack another request on
     // top of the one still in flight, and the delay has to change with the failure count.
@@ -701,7 +710,7 @@ function App() {
 
       try {
         await pullMessages()
-        if (tick % INSIGHT_POLL_EVERY === 0) {
+        if (tick % INSIGHT_POLL_EVERY === 0 || Date.now() < burstUntil) {
           await Promise.all([pullEmotion(), pullResults()])
         }
         failures = 0
@@ -715,9 +724,11 @@ function App() {
     }
 
     // Poll right now instead of waiting out the current delay — used after sending a message, and
-    // when the tab comes back to the foreground.
-    function pollNow() {
+    // when the tab comes back to the foreground. `burst` additionally puts the insight reads on
+    // every tick for a while, for the callers that know the AI is about to produce something.
+    function pollNow({ burst = false } = {}) {
       if (cancelled) return
+      if (burst) burstUntil = Date.now() + INSIGHT_BURST_MS
       clearTimeout(timerId)
       failures = 0
       run()
@@ -810,7 +821,7 @@ function App() {
               message.clientMessageId === clientMessageId ? toLocalMessage(stored) : message,
             ),
           )
-          pollNowRef.current?.()
+          pollNowRef.current?.({ burst: true })
         })
         .catch((error) => {
           console.warn('Could not send the message.', error)
