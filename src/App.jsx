@@ -410,7 +410,7 @@ function ToneCorrectionCard({
       <div className="h-[1.2px] w-[calc(100%-70px)] shrink-0 bg-[#a6868e]/50" />
 
       <div className="mt-[12px] flex shrink-0 items-center gap-[3px]">
-        <p className="text-center text-[14px] font-semibold tracking-[0.14px] text-[#7d6a71]">대신 이렇게 말해보세요!</p>
+        <p className="text-center text-[14px] font-semibold tracking-[0.14px] text-[#7d6a71]">이런 말투는 어때요?</p>
         <img src={speechBubbleIcon} alt="" className="size-[14px]" />
       </div>
 
