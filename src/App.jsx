@@ -889,6 +889,14 @@ function App() {
   }
 
   function handleKeyDown(e) {
+    // The Enter that commits an in-progress IME composition arrives here as a keydown too, and on
+    // macOS Korean input that is the same Enter people press to send. Acting on it sends the text
+    // as it stood mid-composition and then lets the IME commit its final character into the
+    // now-empty box — which reads as the last letter escaping into the next message. Waiting for
+    // the composition to finish means the first Enter only commits and the next one sends.
+    // keyCode 229 is the same signal for browsers that don't set isComposing.
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
       handleSend()
