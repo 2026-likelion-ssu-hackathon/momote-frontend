@@ -659,7 +659,14 @@ function ParticipantPicker({ onChoose }) {
   return (
     <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
       <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
-        <p className="font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+        {/* The service name, in the handwritten face the thread's captions use — this is the first
+            screen anyone opening the link sees, so it should say what it is before it asks
+            anything. */}
+        <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+          momote
+        </p>
+
+        <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
           누구로 시작할까요?
         </p>
         <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
