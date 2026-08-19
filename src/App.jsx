@@ -285,8 +285,25 @@ function youtubeWatchUrl(videoId) {
   return `https://www.youtube.com/watch?v=${videoId}`
 }
 
+// mqdefault, not hqdefault: hqdefault is 480x360 (4:3) while a video frame is 16:9, so it arrives
+// with the frame boxed inside padding. mqdefault is 320x180 — exactly 16:9 — so at a 16:9 container
+// the whole thumbnail shows with nothing cropped and no dead space.
 function youtubeThumbnailUrl(videoId) {
-  return `https://img.youtube.com/vi/${videoId}/hqdefault.jpg`
+  return `https://img.youtube.com/vi/${videoId}/mqdefault.jpg`
+}
+
+// YouTube's play-button mark, drawn inline rather than shipped as a file so it stays crisp at any
+// size and carries the card's own currentColor-free brand red.
+function YouTubeLogo({ className = '' }) {
+  return (
+    <svg viewBox="0 0 28 20" className={className} aria-hidden="true">
+      <path
+        d="M27.4 3.1A3.5 3.5 0 0 0 24.9.6C22.7 0 14 0 14 0S5.3 0 3.1.6A3.5 3.5 0 0 0 .6 3.1C0 5.3 0 10 0 10s0 4.7.6 6.9a3.5 3.5 0 0 0 2.5 2.5C5.3 20 14 20 14 20s8.7 0 10.9-.6a3.5 3.5 0 0 0 2.5-2.5C28 14.7 28 10 28 10s0-4.7-.6-6.9Z"
+        fill="#FF0000"
+      />
+      <path d="M11.2 14.3 18.5 10l-7.3-4.3v8.6Z" fill="#fff" />
+    </svg>
+  )
 }
 
 // "유튜브 영상 추천" expanded-sheet state. `videoId`/`title`/`channel`/`note` come from an AI
@@ -313,10 +330,16 @@ function VideoCard({
         rel="noopener noreferrer"
         className="mt-[22px] block w-[290px] shrink-0 cursor-pointer overflow-hidden rounded-[20px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
       >
-        <img src={youtubeThumbnailUrl(videoId)} alt="" className="h-[112px] w-full object-cover" />
-        <div className="px-3 pb-[8px] pt-[10px]">
-          <p className="truncate text-[13px] font-semibold text-black">{title}</p>
-          <p className="mt-[2px] truncate text-[11px] font-medium text-black/50">{channel}</p>
+        {/* aspect-video matches the thumbnail's own 16:9, so object-cover has nothing to crop. */}
+        <img src={youtubeThumbnailUrl(videoId)} alt="" className="aspect-video w-full object-cover" />
+        <div className="flex items-start gap-[7px] px-3 pb-[8px] pt-[10px]">
+          <YouTubeLogo className="mt-[1px] h-[14px] w-[20px] shrink-0" />
+          {/* min-w-0 so the truncate below can actually shrink — a flex item's default min-width is
+              its content, which would push the title past the card instead of clipping it. */}
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-[13px] font-semibold text-black">{title}</p>
+            <p className="mt-[2px] truncate text-[11px] font-medium text-black/50">{channel}</p>
+          </div>
         </div>
       </a>
 
@@ -586,7 +609,10 @@ const SUGGESTION_ZONE_PERCENTS = {
 const SUGGESTION_ZONE_MIN_PX = {
   toneCorrection: 230,
   dateCourse: 270,
-  video: 270,
+  // 330 rather than 270 since the thumbnail went to a full 16:9 frame: divider 1.2 + gap 22 +
+  // card 219.1 (163.1 of thumbnail + 56 of title/channel) + 72 for a three-line note = 314.3, plus
+  // room for the spacers either side of the note to still read as spacing.
+  video: 330,
 }
 
 function App() {
