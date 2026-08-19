@@ -56,6 +56,23 @@ function resolveId(queryKey, storageKey, envValue) {
 const CHAT_ROOM_ID = resolveId('roomId', 'momote.chatRoomId', import.meta.env.VITE_CHAT_ROOM_ID)
 const USER_ID = resolveId('userId', 'momote.userId', import.meta.env.VITE_USER_ID)
 
+// Both ids have been read and remembered by this point, so take them back out of the address bar.
+// The link only has to be opened once per device — after that the identity comes from storage —
+// and what people see on screen during a demo should just be the site, not its wiring.
+// replaceState rather than pushState so the query doesn't come back on a Back press.
+if (typeof window !== 'undefined' && window.history?.replaceState) {
+  try {
+    const url = new URL(window.location.href)
+    if (url.searchParams.has('roomId') || url.searchParams.has('userId')) {
+      url.searchParams.delete('roomId')
+      url.searchParams.delete('userId')
+      window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
+    }
+  } catch {
+    // Nothing to recover from — the ids are already resolved, the query is just still visible.
+  }
+}
+
 // Without a room and a user there is nothing to call, and every request would 404. App.jsx checks
 // this and keeps running its local demo behaviour instead of showing a broken screen, so the build
 // stays presentable until the team provisions real IDs.
