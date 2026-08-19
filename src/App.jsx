@@ -415,7 +415,10 @@ function ToneCorrectionCard({
       </div>
 
       <div className="relative mt-[10px] w-[calc(100%-70px)] shrink-0 rounded-[29px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-6 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
-        <span className="absolute left-3 top-2 rotate-180 font-['MemomentKkukkukk'] text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
+        {/* Mirrored on X only. rotate-180 flips the Y axis too, and this font's quote glyph is just
+            7px of ink sitting at the very top of its 30px line box — so the flipped one landed 21px
+            lower than its pair. scale-x-[-1] gives the same opening-quote shape at the same height. */}
+        <span className="absolute left-3 top-2 scale-x-[-1] font-['MemomentKkukkukk'] text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
         <span className="absolute right-3 top-2 font-['MemomentKkukkukk'] text-[30px] leading-none tracking-[0.3px] text-[#562f3e]">”</span>
         <p className="whitespace-pre-wrap px-3 text-center text-[14px] font-semibold leading-[19px] tracking-[0.145px] text-[#562f3e]">{suggestion}</p>
       </div>
