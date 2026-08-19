@@ -53,8 +53,45 @@ function resolveId(queryKey, storageKey, envValue) {
   return read('sessionStorage') ?? read('localStorage') ?? envValue
 }
 
+// `?reset` forgets which participant this device is, sending it back to the picker. It exists for
+// rehearsal: switching one phone between the two sides otherwise means a private window or a
+// developer console, and a phone has no console. Runs before anything reads storage.
+if (typeof window !== 'undefined') {
+  try {
+    if (new URLSearchParams(window.location.search).has('reset')) {
+      for (const store of ['sessionStorage', 'localStorage']) {
+        try {
+          window[store].removeItem('momote.userId')
+        } catch {
+          // Storage unavailable; there was nothing remembered to forget either.
+        }
+      }
+    }
+  } catch {
+    // No parsable location — nothing to reset.
+  }
+}
+
 const CHAT_ROOM_ID = resolveId('roomId', 'momote.chatRoomId', import.meta.env.VITE_CHAT_ROOM_ID)
-const USER_ID = resolveId('userId', 'momote.userId', import.meta.env.VITE_USER_ID)
+
+// Deliberately no env fallback: an unchosen user is the signal that this device should be asked who
+// it is (see ParticipantPicker in App.jsx). Falling back to the build value would silently make
+// everyone who opens the bare link the same participant, which is the thing the picker exists to
+// avoid — two people opening one submitted URL have to end up on opposite sides of the chat.
+let USER_ID = resolveId('userId', 'momote.userId', null)
+
+// The picker still needs *some* valid id to ask the server who the room's two participants are, and
+// this is the only one available before anybody has chosen. It authenticates that lookup and
+// nothing else.
+const BOOTSTRAP_USER_ID = import.meta.env.VITE_USER_ID
+
+// Who the room's two participants are, for when the nickname lookup can't run — an unreachable
+// backend must not leave the picker with two dead buttons and no way into the app. Names are the
+// only thing lost; the ids are what actually decide identity.
+const FALLBACK_PARTICIPANT_IDS = (import.meta.env.VITE_PARTICIPANT_IDS ?? '1,2')
+  .split(',')
+  .map((id) => Number(id.trim()))
+  .filter(Number.isFinite)
 
 // Both ids have been read and remembered by this point, so take them back out of the address bar.
 // The link only has to be opened once per device — after that the identity comes from storage —
@@ -63,9 +100,10 @@ const USER_ID = resolveId('userId', 'momote.userId', import.meta.env.VITE_USER_I
 if (typeof window !== 'undefined' && window.history?.replaceState) {
   try {
     const url = new URL(window.location.href)
-    if (url.searchParams.has('roomId') || url.searchParams.has('userId')) {
+    if (['roomId', 'userId', 'reset'].some((key) => url.searchParams.has(key))) {
       url.searchParams.delete('roomId')
       url.searchParams.delete('userId')
+      url.searchParams.delete('reset')
       window.history.replaceState(null, '', `${url.pathname}${url.search}${url.hash}`)
     }
   } catch {
@@ -84,7 +122,47 @@ export function currentUserId() {
   return Number(USER_ID)
 }
 
-async function request(path, { method = 'GET', body, query } = {}) {
+// Whether the room is known but nobody on this device has said which participant they are.
+export function needsParticipantChoice() {
+  return Boolean(CHAT_ROOM_ID) && !USER_ID
+}
+
+// Records the choice for this tab and this browser, so the picker is a once-per-device question.
+export function chooseUserId(userId) {
+  USER_ID = String(userId)
+  for (const store of ['sessionStorage', 'localStorage']) {
+    try {
+      window[store].setItem('momote.userId', USER_ID)
+    } catch {
+      // Storage unavailable — the choice still holds for this page load.
+    }
+  }
+}
+
+// Both participants, for the picker to offer. The room endpoint only ever names the *other* person
+// relative to whoever asks, so asking as each side in turn is what produces both names: the seed
+// call reveals the partner's id and nickname, and calling back as that partner names the seed.
+export async function fetchParticipants() {
+  const fallback = FALLBACK_PARTICIPANT_IDS.map((userId) => ({ userId, nickname: `사용자 ${userId}` }))
+  if (!CHAT_ROOM_ID || !BOOTSTRAP_USER_ID) return fallback.length ? fallback : null
+
+  try {
+    const seedId = Number(BOOTSTRAP_USER_ID)
+    const seen = await request('', { asUserId: seedId })
+    const partnerId = seen?.partner?.userId
+    if (!partnerId) return fallback
+    const mirrored = await request('', { asUserId: partnerId })
+    return [
+      { userId: seedId, nickname: mirrored?.partner?.nickname ?? `사용자 ${seedId}` },
+      { userId: partnerId, nickname: seen?.partner?.nickname ?? `사용자 ${partnerId}` },
+    ]
+  } catch (error) {
+    console.warn('Falling back to configured participant ids — could not read their names.', error)
+    return fallback.length ? fallback : null
+  }
+}
+
+async function request(path, { method = 'GET', body, query, asUserId } = {}) {
   const url = new URL(`${API_BASE_URL}/api/chat-rooms/${CHAT_ROOM_ID}${path}`)
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
@@ -93,7 +171,9 @@ async function request(path, { method = 'GET', body, query } = {}) {
   const response = await fetch(url, {
     method,
     headers: {
-      'X-User-Id': String(USER_ID),
+      // asUserId is only for the pre-choice participant lookup; everything else speaks as whoever
+      // this device has been established to be.
+      'X-User-Id': String(asUserId ?? USER_ID),
       ...(body ? { 'Content-Type': 'application/json' } : {}),
     },
     ...(body ? { body: JSON.stringify(body) } : {}),

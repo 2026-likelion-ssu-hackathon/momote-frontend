@@ -9,12 +9,15 @@ import threadNeutralGif from './assets/thread/neutral.gif'
 import threadTangledGif from './assets/thread/tangled.gif'
 import threadTenseGif from './assets/thread/tense.gif'
 import {
+  chooseUserId,
   currentUserId,
   fetchAiResults,
   fetchChatRoom,
   fetchEmotionAnalyses,
   fetchMessages,
+  fetchParticipants,
   isBackendConfigured,
+  needsParticipantChoice,
   newClientMessageId,
   sendMessage as postMessage,
   suggestionPropsFromResult,
@@ -622,7 +625,80 @@ const SUGGESTION_ZONE_MIN_PX = {
   video: 292,
 }
 
+// Asked once per device, before the chat opens, when the room is known but this browser has not
+// been told which of the two people it belongs to. The alternative is baking a participant into the
+// build, which makes everyone who opens the submitted link the same person — so two judges trying
+// the couple chat would both be the same side of it and see their own messages mirrored back.
+//
+// The room endpoint only ever names the *other* participant relative to whoever asks, so the two
+// names come from asking as each side in turn (see fetchParticipants).
+// The seeded accounts are named "테스트 사용자 A/B" server-side, and that "테스트" reads as unfinished
+// on a screen a judge sees first. Only the prefix is dropped, so if the room is ever renamed to real
+// names they come through untouched.
+function displayNickname(nickname) {
+  return nickname?.replace(/^테스트\s+/, '') ?? nickname
+}
+
+function ParticipantPicker({ onChoose }) {
+  const [people, setPeople] = useState(null)
+  const [failed, setFailed] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    fetchParticipants()
+      .then((found) => !cancelled && (found ? setPeople(found) : setFailed(true)))
+      .catch((error) => {
+        console.warn('Could not read the room participants.', error)
+        if (!cancelled) setFailed(true)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  return (
+    <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+      <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+        <p className="font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+          누구로 시작할까요?
+        </p>
+        <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
+          한 번만 고르면 이 기기에 저장돼요
+        </p>
+
+        <div className="mt-[34px] flex w-full items-stretch justify-center gap-[14px]">
+          {(people ?? [null, null]).map((person, i) => (
+            <button
+              key={person?.userId ?? i}
+              type="button"
+              disabled={!person}
+              onClick={() => person && onChoose(person.userId)}
+              className="flex flex-1 cursor-pointer flex-col items-center gap-[10px] rounded-[24px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-4 py-5 shadow-[0_2px_20px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default disabled:opacity-60"
+            >
+              <div className="size-[64px] overflow-hidden rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.15)]">
+                <img src={i === 0 ? avatarBlue : avatarPink} alt="" className="size-full object-cover" />
+              </div>
+              <span className="w-full truncate text-center text-[14px] font-semibold text-[#562f3e]">
+                {person ? displayNickname(person.nickname) : '불러오는 중'}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {failed && (
+          <p className="mt-[24px] text-center text-[13px] font-medium text-[#a6868e]">
+            참여자 정보를 불러오지 못했어요. 새로고침해 주세요.
+          </p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function App() {
+  // Re-read on mount rather than at module scope so choosing re-renders straight into the chat.
+  const [awaitingChoice, setAwaitingChoice] = useState(() => needsParticipantChoice())
+
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
   const [isSheetOpen, setIsSheetOpen] = useState(false)
@@ -928,6 +1004,20 @@ function App() {
   // exactly 100dvh tall, so the two units agree.
   const openSheetHeight = `max(${SUGGESTION_ZONE_PERCENTS[suggestionType]}dvh, ${HEADER_FOOTPRINT_PX + SUGGESTION_ZONE_MIN_PX[suggestionType]}px)`
   const sheetHeightValue = isSheetOpen && hasSuggestion ? openSheetHeight : `${HEADER_FOOTPRINT_PX}px`
+
+  // Below every hook, so the early return doesn't change how many run between renders. The effects
+  // above all sit behind `backendLive`, which is false until a participant is chosen, so nothing
+  // polls or classifies while the picker is up.
+  if (awaitingChoice) {
+    return (
+      <ParticipantPicker
+        onChoose={(userId) => {
+          chooseUserId(userId)
+          setAwaitingChoice(false)
+        }}
+      />
+    )
+  }
 
   return (
     <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
