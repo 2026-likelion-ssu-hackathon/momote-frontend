@@ -321,7 +321,9 @@ function VideoCard({
       </a>
 
       <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
-      <p className="w-[calc(100%-70px)] shrink-0 whitespace-pre-wrap text-center font-['MemomentKkukkukk'] text-[16px] leading-[24px] tracking-[0.16px] text-[#7d6a71]">{note}</p>
+      {/* break-keep so the line wraps between Korean words rather than inside one — the default
+          breaks CJK at any character, which split this note as "…상대의 진짜 마음" / "을 확인하고…". */}
+      <p className="w-[calc(100%-70px)] shrink-0 whitespace-pre-wrap break-keep text-center font-['MemomentKkukkukk'] text-[16px] leading-[24px] tracking-[0.16px] text-[#7d6a71]">{note}</p>
       <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
     </div>
   )
@@ -386,7 +388,8 @@ function DateCourseCard({
           <div key={`gap-${i}`} aria-hidden="true" style={{ flexGrow: i === places.length - 1 ? 1.7 : 0.6 }} />,
         ])}
         <div className="w-[calc(100%-56px)] shrink-0">
-          <p className="whitespace-pre-wrap text-center font-['MemomentKkukkukk'] text-[16px] leading-[19px] tracking-[0.13px] text-[#7d6a71]">{note}</p>
+          {/* break-keep for the same reason as VideoCard's note — see there. */}
+          <p className="whitespace-pre-wrap break-keep text-center font-['MemomentKkukkukk'] text-[16px] leading-[19px] tracking-[0.13px] text-[#7d6a71]">{note}</p>
         </div>
         <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
       </div>
@@ -426,7 +429,8 @@ function ToneCorrectionCard({
       </div>
 
       <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
-      <p className="w-full shrink-0 whitespace-pre-wrap px-2 text-center font-['MemomentKkukkukk'] text-[16px] leading-[19px] tracking-[0.16px] text-[#7d6a71]">{reason}</p>
+      {/* break-keep for the same reason as VideoCard's note — see there. */}
+      <p className="w-full shrink-0 whitespace-pre-wrap break-keep px-2 text-center font-['MemomentKkukkukk'] text-[16px] leading-[19px] tracking-[0.16px] text-[#7d6a71]">{reason}</p>
       <div aria-hidden="true" style={{ flexGrow: 1.7 }} />
     </div>
   )
@@ -869,18 +873,20 @@ function App() {
   // genuine AI advice if it were shown in its place.
   const hasSuggestion = backendLive ? Boolean(serverSuggestion.props) && suggestionIsCurrent : true
 
-  const currentExpandPercent = isSheetOpen && hasSuggestion ? SUGGESTION_ZONE_PERCENTS[suggestionType] : 0
   const SuggestionCard = SUGGESTION_SCREENS[suggestionType]
   const sizeTransition = 'height 300ms ease-out'
-  // The sheet's TOTAL height (status bar + header + revealed panel) when open, e.g. "50%" of the
-  // frame — not the header footprint plus another 50% on top of it. `max()` with the panel's pixel
-  // floor (see SUGGESTION_ZONE_MIN_PX) keeps it at that percentage on a normal-height screen, but
-  // stops it from shrinking below what the card actually needs on a short one — so the panel never
-  // needs to scroll internally regardless of screen size. Closed, it's just the fixed header
-  // footprint.
-  const sheetHeightValue = isSheetOpen && hasSuggestion
-    ? `max(${currentExpandPercent}%, ${HEADER_FOOTPRINT_PX + SUGGESTION_ZONE_MIN_PX[suggestionType]}px)`
-    : `${HEADER_FOOTPRINT_PX}px`
+
+  // The sheet's TOTAL height (header + revealed panel) when open, e.g. "50%" of the frame — not the
+  // header footprint plus another 50% on top of it. `max()` with the panel's pixel floor (see
+  // SUGGESTION_ZONE_MIN_PX) keeps it at that percentage on a normal-height screen, but stops it
+  // from shrinking below what the card actually needs on a short one — so the panel never needs to
+  // scroll internally regardless of screen size.
+  //
+  // In dvh rather than %, because the panel inside needs this same number and a percentage there
+  // would resolve against the sheet (its containing block) instead of the frame. The frame is
+  // exactly 100dvh tall, so the two units agree.
+  const openSheetHeight = `max(${SUGGESTION_ZONE_PERCENTS[suggestionType]}dvh, ${HEADER_FOOTPRINT_PX + SUGGESTION_ZONE_MIN_PX[suggestionType]}px)`
+  const sheetHeightValue = isSheetOpen && hasSuggestion ? openSheetHeight : `${HEADER_FOOTPRINT_PX}px`
 
   return (
     <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
@@ -986,17 +992,17 @@ function App() {
               )}
             </div>
           </div>
-          {hasMessages && currentExpandPercent > 0 && (
+          {hasMessages && hasSuggestion && (
             <div
               style={{
                 top: `${HEADER_FOOTPRINT_PX}px`,
-                // "100%" here means 100% of THIS element's own containing block, which is the
-                // sheet div right above (not the frame) — the sheet's own height already equals
-                // currentExpandPercent% of the frame, so "all of the sheet minus the header" is
-                // exactly the revealed panel's height. Using currentExpandPercent% directly here
-                // would compound against the sheet's height a second time and come out far short.
-                height: `calc(100% - ${HEADER_FOOTPRINT_PX}px)`,
-                transition: sizeTransition,
+                // Always the panel's *open* height, even while the sheet is shut. Sizing it to the
+                // sheet instead (`calc(100% - header)`) meant it grew along with the animation, and
+                // the card inside lays itself out with flex-grow spacers — so every frame of the
+                // open redistributed that space and the content visibly slid into place. Holding
+                // the height still lets the sheet's own overflow-hidden do the work: the card sits
+                // where it will end up and is uncovered rather than pushed.
+                height: `calc(${openSheetHeight} - ${HEADER_FOOTPRINT_PX}px)`,
               }}
               className="chat-scroll absolute left-0 right-0 overflow-y-auto px-[10px] pb-[8px] pt-0"
             >
