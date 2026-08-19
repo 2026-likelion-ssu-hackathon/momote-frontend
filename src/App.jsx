@@ -328,12 +328,17 @@ function VideoCard({
         href={youtubeWatchUrl(videoId)}
         target="_blank"
         rel="noopener noreferrer"
-        className="mt-[22px] block w-[290px] shrink-0 cursor-pointer overflow-hidden rounded-[20px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
+        className="mt-[22px] block w-[220px] shrink-0 cursor-pointer overflow-hidden rounded-[20px] bg-white shadow-[0_4px_6px_rgba(9,9,9,0.1)] transition-transform duration-[120ms] ease-out hover:scale-[1.01] active:scale-[0.98]"
       >
         {/* aspect-video matches the thumbnail's own 16:9, so object-cover has nothing to crop. */}
         <img src={youtubeThumbnailUrl(videoId)} alt="" className="aspect-video w-full object-cover" />
         <div className="flex items-start gap-[7px] px-3 pb-[8px] pt-[10px]">
-          <YouTubeLogo className="mt-[1px] h-[14px] w-[20px] shrink-0" />
+          {/* Boxed to the title's own line height (13px text at Tailwind's 1.5 leading = 19.5px) and
+              centred inside it, so the logo sits on the title's midline instead of its line-box top
+              — aligning to the top left it 1.8px high. */}
+          <span className="flex h-[19.5px] shrink-0 items-center">
+            <YouTubeLogo className="h-[14px] w-[20px]" />
+          </span>
           {/* min-w-0 so the truncate below can actually shrink — a flex item's default min-width is
               its content, which would push the title past the card instead of clipping it. */}
           <div className="min-w-0 flex-1">
@@ -596,9 +601,9 @@ const HEADER_FOOTPRINT_PX = HEADER_HEIGHT
 // height (at typical phone-portrait proportions) without needing to scroll internally; video opens
 // a bit taller at 55%.
 const SUGGESTION_ZONE_PERCENTS = {
-  toneCorrection: 50,
-  dateCourse: 50,
-  video: 55,
+  toneCorrection: 43,
+  dateCourse: 45,
+  video: 48,
 }
 // Pixel floor for the revealed panel (not the whole sheet) — a pure percentage looks right on a
 // normal phone-height screen, but on a short one (landscape, a small browser window) that same
@@ -607,12 +612,14 @@ const SUGGESTION_ZONE_PERCENTS = {
 // on tall screens and only floors it on short ones, so the panel's content never has to scroll —
 // these numbers are the measured content height of each card plus a few px of margin.
 const SUGGESTION_ZONE_MIN_PX = {
-  toneCorrection: 230,
-  dateCourse: 270,
-  // 330 rather than 270 since the thumbnail went to a full 16:9 frame: divider 1.2 + gap 22 +
-  // card 219.1 (163.1 of thumbnail + 56 of title/channel) + 72 for a three-line note = 314.3, plus
-  // room for the spacers either side of the note to still read as spacing.
-  video: 330,
+  // Measured empirically by shrinking each panel until its content stops fitting: 170 / 210 / 290
+  // with a two-line closing note. A three-line one adds 24, and the flex spacers need something
+  // left over or the card sits flush against both edges — hence the margin on top of that.
+  toneCorrection: 210,
+  dateCourse: 250,
+  // video still runs tallest because its thumbnail is a full 16:9 frame — 124px at the card's 220px
+  // width, narrowed from 290 precisely to buy this back. Measured minimum is 252.
+  video: 292,
 }
 
 function App() {
