@@ -377,6 +377,21 @@ function kakaoMapSearchUrl(query) {
   return `https://map.kakao.com/link/search/${encodeURIComponent(query)}`
 }
 
+// Kakao Map's app-icon mark (yellow tile, blue pin), drawn inline rather than shipped as a file so
+// it stays crisp at PlaceCard's small size — same reasoning as YouTubeLogo above.
+function KakaoMapLogo({ className = '' }) {
+  return (
+    <svg viewBox="0 0 28 28" className={className} aria-hidden="true">
+      <rect width="28" height="28" rx="7" fill="#FEE500" />
+      <path
+        d="M14 6.5c-3.31 0-6 2.57-6 5.9 0 4.3 5.2 8.66 5.6 9.05a.55.55 0 0 0 .8 0c.4-.39 5.6-4.76 5.6-9.05 0-3.33-2.69-5.9-6-5.9Z"
+        fill="#3374FF"
+      />
+      <circle cx="14" cy="12.1" r="2.3" fill="#FEE500" />
+    </svg>
+  )
+}
+
 // Fixed h-52 (Figma 709:2538) + truncated single-line text (not whitespace-pre-wrap) so the card's
 // size/shape never shifts once the AI worker starts filling in real place names/descriptions of
 // varying length — only the text content changes, not the layout.
@@ -386,10 +401,13 @@ function PlaceCard({ name, description }) {
       href={kakaoMapSearchUrl(name)}
       target="_blank"
       rel="noopener noreferrer"
-      className="flex h-[52px] w-full shrink-0 cursor-pointer flex-col items-center justify-center gap-[2px] rounded-[15px] border-2 border-[#f4e0e5] bg-white/80 px-4 shadow-[0_3px_4px_#ffcfdb] transition-transform duration-[120ms] ease-out hover:scale-[1.015] active:scale-[0.98]"
+      className="flex h-[52px] w-full shrink-0 cursor-pointer flex-col justify-center gap-[2px] rounded-[15px] border-2 border-[#f4e0e5] bg-white/80 px-4 shadow-[0_3px_4px_#ffcfdb] transition-transform duration-[120ms] ease-out hover:scale-[1.015] active:scale-[0.98]"
     >
-      <p className="w-full truncate text-center text-[14px] font-semibold leading-[18px] text-[#562f3e]">{name}</p>
-      <p className="w-full truncate text-center text-[11px] tracking-[0.11px] text-[#7d6a71]">{description}</p>
+      <div className="flex min-w-0 items-center gap-[4px]">
+        <p className="truncate text-left text-[14px] font-semibold leading-[18px] text-[#562f3e]">{name}</p>
+        <KakaoMapLogo className="size-[14px] shrink-0" />
+      </div>
+      <p className="w-full truncate text-left text-[11px] tracking-[0.11px] text-[#7d6a71]">{description}</p>
     </a>
   )
 }
