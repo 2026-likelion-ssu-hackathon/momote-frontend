@@ -54,6 +54,16 @@ const SUGGESTION_TRIGGER_WINDOW = 15
 // window alone cannot outrun people typing faster than the worker can answer.
 const SUGGESTION_FRESH_MS = 120_000
 
+// A tone correction gets a much shorter leash than the windows above. It is advice about the
+// message its sender just typed — once they have sent a few more messages the moment has passed,
+// and leaving the card up reads as scolding someone who has already moved on (measured: the card
+// outlived a fight, the banter after it, and an exchange of 사랑해 before the 15-message window
+// let it go). Date courses and videos stay useful for a while ("this weekend", "watch later"), so
+// they keep the wide window. The 45s floor still guarantees the card is on screen long enough to
+// read even when the conversation types faster than the worker answers.
+const TONE_TRIGGER_WINDOW = 3
+const TONE_FRESH_MS = 45_000
+
 const SUGGESTION_DATE_KEYWORDS = ['데이트', '코스', '어디', '장소', '놀러', '여행', '만나']
 const SUGGESTION_VIDEO_KEYWORDS = ['영상', '유튜브', '영화', '유튭']
 
@@ -920,11 +930,14 @@ function App() {
   // of the messages that triggered it is still inside the recent window. A result with no trigger
   // ids is shown rather than hidden: it can't be judged stale, and dropping it would lose real AI
   // output over a missing field.
-  const recentMessageIds = new Set(messages.slice(-SUGGESTION_TRIGGER_WINDOW).map((message) => message.id))
+  const suggestionIsTone = serverSuggestion.type === 'toneCorrection'
+  const suggestionWindow = suggestionIsTone ? TONE_TRIGGER_WINDOW : SUGGESTION_TRIGGER_WINDOW
+  const suggestionFreshMs = suggestionIsTone ? TONE_FRESH_MS : SUGGESTION_FRESH_MS
+  const recentMessageIds = new Set(messages.slice(-suggestionWindow).map((message) => message.id))
   const suggestionIsCurrent =
     !serverSuggestion.triggerMessageIds?.length ||
     serverSuggestion.triggerMessageIds.some((id) => recentMessageIds.has(id)) ||
-    (serverSuggestion.createdAt !== null && Date.now() - serverSuggestion.createdAt < SUGGESTION_FRESH_MS)
+    (serverSuggestion.createdAt !== null && Date.now() - serverSuggestion.createdAt < suggestionFreshMs)
 
   function handleSend() {
     const text = inputValue.trim()
