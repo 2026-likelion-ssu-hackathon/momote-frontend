@@ -621,8 +621,10 @@ const SUGGESTION_ZONE_MIN_PX = {
   toneCorrection: 210,
   dateCourse: 250,
   // video still runs tallest because its thumbnail is a full 16:9 frame — 124px at the card's 220px
-  // width, narrowed from 290 precisely to buy this back. Measured minimum is 252.
-  video: 292,
+  // width, narrowed from 290 precisely to buy this back. Measured minimum is 252, and 292 fits the
+  // three-line note today — but only exactly: at 320px wide there was no room for a fourth line, and
+  // the note is AI-written, so its length is not ours to promise. One more line of headroom.
+  video: 316,
 }
 
 // Asked once per device, before the chat opens, when the room is known but this browser has not
