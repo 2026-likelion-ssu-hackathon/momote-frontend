@@ -66,77 +66,6 @@ END_LIFT_PX = {
     "love": 7,
 }
 
-# tense's resting stretch (everywhere the travelling spike isn't) is a hand-drawn line whose
-# thickness wanders 2-7px and whose centre drifts up to ~2px column to column — normal "crayon"
-# character on the other four assets, but tense now holds each frame for 240ms (see DELAY_MS), long
-# enough for that per-column wobble to read as an uneven, slightly broken line instead of texture.
-# Columns at or under this ink count are "resting line"; anything thicker is the spike itself, which
-# is left completely untouched — an emotional waveform is supposed to look irregular.
-BASELINE_INK_MAX = {
-    "tense": 8,
-}
-
-# Fixed thickness the resting stretch is redrawn at, per mood — the median measured across all
-# tense frames' resting columns (mean 4.8px, stdev 0.5px), so this reads as the same line weight the
-# artwork already mostly draws, just without the ±1-2px per-column jitter.
-BASELINE_STROKE_PX = {
-    "tense": 5,
-}
-
-
-def smooth_baseline(frames, ink_max, stroke_px):
-    """Flatten a mood's resting stretch to one constant-height, constant-thickness line per frame.
-
-    A first version redrew each resting column at its own locally-averaged height instead of one
-    shared height, on the assumption the line curves gently and only needed its noise smoothed out.
-    Measuring the resting stretch's centre across the whole width and several frames showed
-    otherwise — it never actually moves (32.0-36.0px for every frame checked, no drift between the
-    two sides of the travelling spike) — so the per-column differences are pure noise, not a curve.
-    Redrawing each column at its own (still slightly different, still rounded-to-the-pixel) height
-    just traded soft hand-drawn wobble for hard-edged steps, which read worse. Collapsing the whole
-    stretch to one shared height removes the steps instead of narrowing them.
-
-    Per frame, independently: columns with ink at or under `ink_max` are "resting" and get replaced;
-    columns above it are the spike itself and are left exactly as the artwork drew them — an
-    emotional waveform is supposed to look irregular, only the line resting on either side of it
-    isn't. The shared height is the median centre of the resting columns that have any ink at all,
-    and the colour is sampled from the first such column — the assets are palette GIFs with no
-    anti-aliasing gradient, so every resting pixel is already the identical solid colour.
-    """
-    w, h = frames[0].size
-    out = []
-    for frame in frames:
-        ink = column_ink(frame)
-        px = frame.load()
-        baseline_xs = [x for x in range(w) if ink[x] <= ink_max]
-        centers, color = [], None
-        for x in baseline_xs:
-            if ink[x] == 0:
-                continue
-            ys = [y for y in range(h) if px[x, y][3] > 0]
-            centers.append((ys[0] + ys[-1]) / 2)
-            if color is None:
-                color = px[x, ys[len(ys) // 2]]
-        if not centers:
-            out.append(frame)
-            continue
-
-        centers.sort()
-        mid = len(centers) // 2
-        median_y = centers[mid] if len(centers) % 2 else (centers[mid - 1] + centers[mid]) / 2
-        top = round(median_y - stroke_px / 2)
-
-        new_frame = frame.copy()
-        npx = new_frame.load()
-        for x in baseline_xs:
-            for y in range(h):
-                npx[x, y] = (0, 0, 0, 0)
-            for y in range(top, top + stroke_px):
-                if 0 <= y < h:
-                    npx[x, y] = color
-        out.append(new_frame)
-    return out
-
 
 def load(path):
     img = Image.open(path)
@@ -347,9 +276,6 @@ for filename, mood in SOURCES.items():
         if touched:
             filled_frames += 1
             filled_cols += touched
-
-    if mood in BASELINE_INK_MAX:
-        cropped = smooth_baseline(cropped, BASELINE_INK_MAX[mood], BASELINE_STROKE_PX[mood])
 
     if mood in DELAY_MS:
         delays = [DELAY_MS[mood]] * len(delays)
