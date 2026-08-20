@@ -164,7 +164,7 @@ const THREAD_GLOW_COLORS = {
   love: '#ff68d2',
   neutral: null,
   happy: '#31d123',
-  tangled: '#3647ff',
+  tangled: '#32A3FF',
 }
 
 // The small "feeling" line shown above the bold suggestion summary in the shared mood-card —
@@ -403,11 +403,11 @@ function PlaceCard({ name, description }) {
       rel="noopener noreferrer"
       className="flex h-[52px] w-full shrink-0 cursor-pointer flex-col justify-center gap-[2px] rounded-[15px] border-2 border-[#f4e0e5] bg-white/80 px-4 shadow-[0_3px_4px_#ffcfdb] transition-transform duration-[120ms] ease-out hover:scale-[1.015] active:scale-[0.98]"
     >
-      <div className="flex min-w-0 items-center gap-[4px]">
-        <p className="truncate text-left text-[14px] font-semibold leading-[18px] text-[#562f3e]">{name}</p>
+      <div className="flex w-full items-center justify-center gap-[4px]">
         <KakaoMapLogo className="size-[14px] shrink-0" />
+        <p className="min-w-0 truncate text-center text-[14px] font-semibold leading-[18px] text-[#562f3e]">{name}</p>
       </div>
-      <p className="w-full truncate text-left text-[11px] tracking-[0.11px] text-[#7d6a71]">{description}</p>
+      <p className="w-full truncate text-center text-[11px] tracking-[0.11px] text-[#7d6a71]">{description}</p>
     </a>
   )
 }
