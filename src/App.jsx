@@ -64,6 +64,18 @@ const SUGGESTION_FRESH_MS = 120_000
 const TONE_TRIGGER_WINDOW = 3
 const TONE_FRESH_MS = 45_000
 
+// The message windows above only retire a card when newer messages arrive — in a room that goes
+// quiet right after a card fires, the trigger stays inside the window forever and the card never
+// leaves (measured: a tone correction and a video card both sat on screen through minutes of
+// silence). These caps are the absolute ceiling that covers the idle room: past its cap a card is
+// gone no matter what. A tone correction is about the message just sent, so it gets minutes; a
+// video is "for this cooling-off moment", a bit longer; a date course is a weekend plan the couple
+// may keep referring to, longest. Re-renders come from the emotion poll (every ~4.5s), so expiry
+// lands within a few seconds of the deadline.
+const TONE_MAX_AGE_MS = 120_000
+const VIDEO_MAX_AGE_MS = 300_000
+const SUGGESTION_MAX_AGE_MS = 600_000
+
 const SUGGESTION_DATE_KEYWORDS = ['데이트', '코스', '어디', '장소', '놀러', '여행', '만나']
 const SUGGESTION_VIDEO_KEYWORDS = ['영상', '유튜브', '영화', '유튭']
 
@@ -951,11 +963,20 @@ function App() {
   const suggestionIsTone = serverSuggestion.type === 'toneCorrection'
   const suggestionWindow = suggestionIsTone ? TONE_TRIGGER_WINDOW : SUGGESTION_TRIGGER_WINDOW
   const suggestionFreshMs = suggestionIsTone ? TONE_FRESH_MS : SUGGESTION_FRESH_MS
+  const suggestionMaxAgeMs = suggestionIsTone
+    ? TONE_MAX_AGE_MS
+    : serverSuggestion.type === 'video'
+      ? VIDEO_MAX_AGE_MS
+      : SUGGESTION_MAX_AGE_MS
+  // null when the result carried no createdAt — such a card can't be age-judged, so the age
+  // clauses pass it through rather than dropping real AI output over a missing field.
+  const suggestionAgeMs = serverSuggestion.createdAt !== null ? Date.now() - serverSuggestion.createdAt : null
   const recentMessageIds = new Set(messages.slice(-suggestionWindow).map((message) => message.id))
   const suggestionIsCurrent =
-    !serverSuggestion.triggerMessageIds?.length ||
-    serverSuggestion.triggerMessageIds.some((id) => recentMessageIds.has(id)) ||
-    (serverSuggestion.createdAt !== null && Date.now() - serverSuggestion.createdAt < suggestionFreshMs)
+    (suggestionAgeMs === null || suggestionAgeMs < suggestionMaxAgeMs) &&
+    (!serverSuggestion.triggerMessageIds?.length ||
+      serverSuggestion.triggerMessageIds.some((id) => recentMessageIds.has(id)) ||
+      (suggestionAgeMs !== null && suggestionAgeMs < suggestionFreshMs))
 
   function handleSend() {
     const text = inputValue.trim()
