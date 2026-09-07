@@ -5,6 +5,13 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
     <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16.png" />
     <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <!-- Makes "홈 화면에 추가" (Add to Home Screen) launch full-screen with no browser chrome —
+         without a manifest, Android just bookmarks the URL and keeps the address bar visible, and
+         without apple-mobile-web-app-capable, iOS does the same. Together they're what makes the
+         two-phone demo read as a real app icon rather than a Safari/Chrome tab. -->
+    <link rel="manifest" href="/manifest.json" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="momote" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <!-- Tints the OS status-bar/browser-chrome area on iOS Safari and Android Chrome to match the
          app's own background (the gradient's own top color) instead of showing as plain white. -->
