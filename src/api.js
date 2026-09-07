@@ -162,6 +162,35 @@ export async function fetchParticipants() {
   }
 }
 
+// POST /api/chat-rooms/{id}/participants/claim — NOT YET IMPLEMENTED ON THE BACKEND. Requested
+// contract, for whoever picks this up on the backend team:
+//
+//   Request:  POST /api/chat-rooms/{roomId}/participants/claim
+//             X-User-Id: <any known participant id in this room, e.g. the bootstrap id>
+//             { "nickname": "지민" }
+//   Response: { "userId": 2, "nickname": "지민" }
+//   Error:    409 if both of the room's participant slots already have a customised nickname
+//
+// Replaces the old two-card "사용자 A / 사용자 B" picker (see ParticipantPicker in App.jsx) with a
+// single name field: the person types their own name and the SERVER decides which of the room's two
+// fixed ids they become, by finding whichever slot's nickname is still the untouched seed value and
+// assigning that one. This has to be server-side and atomic — if the client instead read "which
+// slot looks unclaimed" and then wrote to it, two people submitting within the same moment could
+// both read "both slots free" and race onto the same id.
+//
+// asUserId uses BOOTSTRAP_USER_ID the same way fetchParticipants' seed call does: this request is
+// what establishes which participant this device is, so it can't yet authenticate as that id.
+export async function claimParticipant(nickname) {
+  if (!CHAT_ROOM_ID || !BOOTSTRAP_USER_ID) {
+    throw new Error('No chat room configured — cannot claim a participant slot.')
+  }
+  return request('/participants/claim', {
+    method: 'POST',
+    body: { nickname },
+    asUserId: Number(BOOTSTRAP_USER_ID),
+  })
+}
+
 async function request(path, { method = 'GET', body, query, asUserId } = {}) {
   const url = new URL(`${API_BASE_URL}/api/chat-rooms/${CHAT_ROOM_ID}${path}`)
   for (const [key, value] of Object.entries(query ?? {})) {

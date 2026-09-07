@@ -10,12 +10,12 @@ import threadTangledGif from './assets/thread/tangled.gif'
 import threadTenseGif from './assets/thread/tense.gif'
 import {
   chooseUserId,
+  claimParticipant,
   currentUserId,
   fetchAiResults,
   fetchChatRoom,
   fetchEmotionAnalyses,
   fetchMessages,
-  fetchParticipants,
   isBackendConfigured,
   needsParticipantChoice,
   newClientMessageId,
@@ -672,31 +672,42 @@ const SUGGESTION_ZONE_MIN_PX = {
 // build, which makes everyone who opens the submitted link the same person — so two judges trying
 // the couple chat would both be the same side of it and see their own messages mirrored back.
 //
-// The room endpoint only ever names the *other* participant relative to whoever asks, so the two
-// names come from asking as each side in turn (see fetchParticipants).
-// The seeded accounts are named "테스트 사용자 A/B" server-side, and that "테스트" reads as unfinished
-// on a screen a judge sees first. Only the prefix is dropped, so if the room is ever renamed to real
-// names they come through untouched.
-function displayNickname(nickname) {
-  return nickname?.replace(/^테스트\s+/, '') ?? nickname
-}
-
+// Used to be a choice between two cards showing the room's existing (seeded "테스트 사용자 A/B")
+// nicknames. Replaced with a name field because the seeded names were never meant to stick — typing
+// your own name here is what the *other* device sees you as, via claimParticipant. Which of the
+// room's two fixed ids that name becomes is decided server-side (see claimParticipant's contract in
+// api.js), not by which card you tapped.
 function ParticipantPicker({ onChoose }) {
-  const [people, setPeople] = useState(null)
-  const [failed, setFailed] = useState(false)
+  const [name, setName] = useState('')
+  const [status, setStatus] = useState('idle') // 'idle' | 'submitting' | 'error'
+  const inputRef = useRef(null)
 
   useEffect(() => {
-    let cancelled = false
-    fetchParticipants()
-      .then((found) => !cancelled && (found ? setPeople(found) : setFailed(true)))
-      .catch((error) => {
-        console.warn('Could not read the room participants.', error)
-        if (!cancelled) setFailed(true)
-      })
-    return () => {
-      cancelled = true
-    }
+    inputRef.current?.focus()
   }, [])
+
+  async function handleSubmit() {
+    const nickname = name.trim()
+    if (!nickname || status === 'submitting') return
+    setStatus('submitting')
+    try {
+      const { userId } = await claimParticipant(nickname)
+      onChoose(userId)
+    } catch (error) {
+      console.warn('Could not claim a participant slot.', error)
+      setStatus('error')
+    }
+  }
+
+  // Same IME guard as the chat input's handleKeyDown — the Enter that commits a Korean composition
+  // arrives here too, and acting on it would submit mid-composition.
+  function handleKeyDown(e) {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
 
   return (
     <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
@@ -709,34 +720,36 @@ function ParticipantPicker({ onChoose }) {
         </p>
 
         <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
-          누구로 시작할까요?
+          이름을 알려주세요
         </p>
         <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
-          한 번만 고르면 이 기기에 저장돼요
+          한 번만 입력하면 이 기기에 저장돼요
         </p>
 
-        <div className="mt-[34px] flex w-full items-stretch justify-center gap-[14px]">
-          {(people ?? [null, null]).map((person, i) => (
-            <button
-              key={person?.userId ?? i}
-              type="button"
-              disabled={!person}
-              onClick={() => person && onChoose(person.userId)}
-              className="flex flex-1 cursor-pointer flex-col items-center gap-[10px] rounded-[24px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-4 py-5 shadow-[0_2px_20px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default disabled:opacity-60"
-            >
-              <div className="size-[64px] overflow-hidden rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.15)]">
-                <img src={i === 0 ? avatarBlue : avatarPink} alt="" className="size-full object-cover" />
-              </div>
-              <span className="w-full truncate text-center text-[14px] font-semibold text-[#562f3e]">
-                {person ? displayNickname(person.nickname) : '불러오는 중'}
-              </span>
-            </button>
-          ))}
+        <div className="mt-[34px] flex w-full max-w-[280px] flex-col items-stretch gap-[12px]">
+          <input
+            ref={inputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="이름 입력"
+            maxLength={12}
+            disabled={status === 'submitting'}
+            className="w-full rounded-[24px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-4 text-center text-[16px] font-semibold text-[#562f3e] shadow-[0_2px_20px_rgba(255,207,219,0.7)] outline-none placeholder:text-[#c9a2a8] disabled:opacity-60"
+          />
+          <button
+            type="button"
+            onClick={handleSubmit}
+            disabled={!name.trim() || status === 'submitting'}
+            className="w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97] disabled:cursor-default disabled:opacity-50"
+          >
+            {status === 'submitting' ? '들어가는 중...' : '시작하기'}
+          </button>
         </div>
 
-        {failed && (
+        {status === 'error' && (
           <p className="mt-[24px] text-center text-[13px] font-medium text-[#a6868e]">
-            참여자 정보를 불러오지 못했어요. 새로고침해 주세요.
+            입장하지 못했어요. 다시 시도해 주세요.
           </p>
         )}
       </div>
