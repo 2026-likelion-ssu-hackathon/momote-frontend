@@ -17,8 +17,10 @@ import {
   fetchEmotionAnalyses,
   fetchMessages,
   isBackendConfigured,
+  myProfile,
   needsParticipantChoice,
   newClientMessageId,
+  rememberMyProfile,
   sendMessage as postMessage,
   suggestionPropsFromResult,
   suggestionTypeFromResultType,
@@ -295,12 +297,15 @@ const AVATAR_IMAGES = {
   pink: avatarPink,
 }
 
-function DefaultAvatar({ glow, side = 'blue' }) {
+// `imageSrc` overrides the blue/pink placeholder with a real photo — this device's own (from
+// myProfile, set at claim time) or the partner's (from serverPartner, polled via fetchChatRoom).
+// Falls back to the placeholder when nobody has set a real photo yet, same as before.
+function DefaultAvatar({ glow, side = 'blue', imageSrc }) {
   return (
     <div className="relative z-10 flex size-[52px] shrink-0 items-center justify-center">
       {glow && <div className="avatar-glow absolute inset-[-3px] rounded-full blur-[5px]" style={{ backgroundColor: glow }} />}
       <div className="relative flex size-[52px] items-center justify-center overflow-hidden rounded-full shadow-[0_2px_8px_rgba(0,0,0,0.15)]">
-        <img src={AVATAR_IMAGES[side]} alt="" className="size-full object-cover" />
+        <img src={imageSrc ?? AVATAR_IMAGES[side]} alt="" className="size-full object-cover" />
       </div>
     </div>
   )
@@ -677,22 +682,82 @@ const SUGGESTION_ZONE_MIN_PX = {
 // your own name here is what the *other* device sees you as, via claimParticipant. Which of the
 // room's two fixed ids that name becomes is decided server-side (see claimParticipant's contract in
 // api.js), not by which card you tapped.
+// A photo is entirely optional — not picking one is how you get the existing blue/pink placeholder
+// (see DefaultAvatar), so there is no separate "기본 프로필" control here, just this button doing
+// nothing. Capped client-side to fail fast with a Korean message instead of waiting on an upload
+// the server would reject anyway — matches the ~5MB the backend spec (see claimParticipant in
+// api.js) suggests capping.
+const MAX_PROFILE_IMAGE_BYTES = 5 * 1024 * 1024
+
+function CameraIcon({ className = '' }) {
+  return (
+    <svg viewBox="0 0 20 20" className={className} fill="none" aria-hidden="true">
+      <path
+        d="M6.5 5.5 7.4 4h5.2l.9 1.5H16a1.5 1.5 0 0 1 1.5 1.5v7A1.5 1.5 0 0 1 16 15.5H4A1.5 1.5 0 0 1 2.5 14V7A1.5 1.5 0 0 1 4 5.5h2.5Z"
+        stroke="currentColor"
+        strokeWidth="1.4"
+        strokeLinejoin="round"
+      />
+      <circle cx="10" cy="10.2" r="2.6" stroke="currentColor" strokeWidth="1.4" />
+    </svg>
+  )
+}
+
 function ParticipantPicker({ onChoose }) {
   const [name, setName] = useState('')
   const [status, setStatus] = useState('idle') // 'idle' | 'submitting' | 'error'
+  const [imageFile, setImageFile] = useState(null)
+  const [previewUrl, setPreviewUrl] = useState(null)
+  const [imageError, setImageError] = useState(null)
   const inputRef = useRef(null)
+  const fileInputRef = useRef(null)
 
   useEffect(() => {
     inputRef.current?.focus()
   }, [])
+
+  // Revokes the previous object URL whenever a new photo replaces it, and on unmount — otherwise
+  // each re-pick leaks the last preview's blob for the life of the tab.
+  useEffect(() => {
+    return () => {
+      if (previewUrl) URL.revokeObjectURL(previewUrl)
+    }
+  }, [previewUrl])
+
+  function handlePickImage() {
+    fileInputRef.current?.click()
+  }
+
+  function handleImageChange(e) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // lets picking the same file again re-fire onChange
+    if (!file) return
+    if (!file.type.startsWith('image/')) {
+      setImageError('이미지 파일만 선택할 수 있어요.')
+      return
+    }
+    if (file.size > MAX_PROFILE_IMAGE_BYTES) {
+      setImageError('5MB 이하의 사진을 선택해주세요.')
+      return
+    }
+    setImageError(null)
+    setImageFile(file)
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return URL.createObjectURL(file)
+    })
+  }
 
   async function handleSubmit() {
     const nickname = name.trim()
     if (!nickname || status === 'submitting') return
     setStatus('submitting')
     try {
-      const { userId } = await claimParticipant(nickname)
-      onChoose(userId)
+      const result = await claimParticipant(nickname, { imageFile })
+      // The server is the source of truth for the nickname it actually stored, but falls back to
+      // what was typed in case a leaner response ever omits it.
+      rememberMyProfile({ nickname: result.nickname ?? nickname, profileImageUrl: result.profileImageUrl ?? null })
+      onChoose(result.userId)
     } catch (error) {
       console.warn('Could not claim a participant slot.', error)
       setStatus('error')
@@ -720,13 +785,33 @@ function ParticipantPicker({ onChoose }) {
         </p>
 
         <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
-          이름을 알려주세요
+          프로필을 설정해주세요
         </p>
         <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
-          한 번만 입력하면 이 기기에 저장돼요
+          한 번만 설정하면 이 기기에 저장돼요
         </p>
 
-        <div className="mt-[34px] flex w-full max-w-[280px] flex-col items-stretch gap-[12px]">
+        <button
+          type="button"
+          onClick={handlePickImage}
+          disabled={status === 'submitting'}
+          className="relative mt-[26px] flex size-[92px] shrink-0 cursor-pointer items-center justify-center transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default"
+        >
+          <div className="size-full overflow-hidden rounded-full border-[1.2px] border-[#f4e0e5] bg-white/80 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
+            <img src={previewUrl ?? avatarBlue} alt="" className="size-full object-cover" />
+          </div>
+          {/* Badges the avatar as tappable — without it, a plain circular photo doesn't read as a
+              button, especially before any photo is picked and it's just the placeholder. */}
+          <span className="absolute bottom-0 right-0 flex size-[30px] items-center justify-center rounded-full bg-[#f25597] text-white shadow-[0_2px_8px_rgba(242,85,151,0.4)]">
+            <CameraIcon className="size-[15px]" />
+          </span>
+        </button>
+        <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
+        {imageError && (
+          <p className="mt-[8px] text-center text-[12px] font-medium text-[#e8507d]">{imageError}</p>
+        )}
+
+        <div className="mt-[22px] flex w-full max-w-[280px] flex-col items-stretch gap-[12px]">
           <input
             ref={inputRef}
             value={name}
@@ -774,6 +859,9 @@ function App() {
   const backendLive = isBackendConfigured()
   const [serverThread, setServerThread] = useState({ state: null, stateText: null })
   const [serverSuggestion, setServerSuggestion] = useState({ type: null, props: null, triggerMessageIds: null, createdAt: null })
+  // The partner's nickname/photo, for the header avatar (see pullRoom below) — "mine" doesn't need
+  // polling, it's already known locally from the moment this device claimed it (see myProfile).
+  const [serverPartner, setServerPartner] = useState({ nickname: null, profileImageUrl: null })
   const lastMessageIdRef = useRef(null)
   const lastResultIdRef = useRef(null)
   // Lets handleSend jump the polling queue instead of waiting out the current delay — the moment
@@ -840,6 +928,19 @@ function App() {
       )
     }
 
+    // The partner's nickname/photo for the header avatar — see serverPartner above. Polled on the
+    // same insight cadence as pullEmotion/pullResults (their profile doesn't change often enough to
+    // need the message-poll cadence) and reused for the startup fail-fast check that used to be a
+    // separate fire-and-forget fetchChatRoom() call below.
+    async function pullRoom() {
+      const room = await fetchChatRoom()
+      if (cancelled) return
+      setServerPartner({
+        nickname: room?.partner?.nickname ?? null,
+        profileImageUrl: room?.partner?.profileImageUrl ?? null,
+      })
+    }
+
     async function pullResults() {
       const after = lastResultIdRef.current
       const results = await fetchAiResults(after ? { afterResultId: after } : undefined)
@@ -891,7 +992,7 @@ function App() {
       try {
         await pullMessages()
         if (tick % INSIGHT_POLL_EVERY === 0 || Date.now() < burstUntil) {
-          await Promise.all([pullEmotion(), pullResults()])
+          await Promise.all([pullEmotion(), pullResults(), pullRoom()])
         }
         failures = 0
       } catch (error) {
@@ -920,12 +1021,10 @@ function App() {
     }
     document.addEventListener('visibilitychange', onVisibilityChange)
 
-    // Not rendered anywhere — called so a wrong room/user id fails loudly at startup with the
-    // server's own message, instead of silently showing an empty chat that looks like "no messages
-    // yet". The polling reads would otherwise just repeat the same 404 quietly.
-    fetchChatRoom().catch((error) =>
-      console.error('Chat room unavailable — check VITE_CHAT_ROOM_ID / VITE_USER_ID.', error),
-    )
+    // tick starts at 0, and 0 % INSIGHT_POLL_EVERY is always 0, so the very first run() already
+    // includes pullRoom() — a wrong room/user id fails loudly (via the catch below) at startup with
+    // the server's own error, instead of silently showing an empty chat that looks like "no messages
+    // yet" while the polling reads just repeat the same 404 quietly.
     run()
 
     return () => {
@@ -1167,9 +1266,12 @@ function App() {
               (matching Figma 643:2971, where only the inner quote box is separately bordered). */}
           <div className="absolute left-[17px] right-[17px] top-[8px] px-5 pt-4 pb-[6px]">
             <div className="relative -mx-[12px] flex h-[52px] items-center justify-between">
-              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" />
+              {/* Left = partner, right = me — matches ChatBubbleRow, where `mine` renders on the
+                  right (justify-end), so "my side" reads the same way in the header as it does in
+                  the conversation below it. */}
+              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" imageSrc={serverPartner.profileImageUrl} />
               <ThreadLineTransition mood={threadState} />
-              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="pink" />
+              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="pink" imageSrc={myProfile().profileImageUrl} />
             </div>
             <div className="mt-0 flex h-[35px] flex-col items-center justify-start gap-[3px] text-center">
               {!hasMessages ? (

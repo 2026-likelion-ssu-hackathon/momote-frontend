@@ -85,14 +85,6 @@ let USER_ID = resolveId('userId', 'momote.userId', null)
 // nothing else.
 const BOOTSTRAP_USER_ID = import.meta.env.VITE_USER_ID
 
-// Who the room's two participants are, for when the nickname lookup can't run — an unreachable
-// backend must not leave the picker with two dead buttons and no way into the app. Names are the
-// only thing lost; the ids are what actually decide identity.
-const FALLBACK_PARTICIPANT_IDS = (import.meta.env.VITE_PARTICIPANT_IDS ?? '1,2')
-  .split(',')
-  .map((id) => Number(id.trim()))
-  .filter(Number.isFinite)
-
 // Both ids have been read and remembered by this point, so take them back out of the address bar.
 // The link only has to be opened once per device — after that the identity comes from storage —
 // and what people see on screen during a demo should just be the site, not its wiring.
@@ -139,59 +131,82 @@ export function chooseUserId(userId) {
   }
 }
 
-// Both participants, for the picker to offer. The room endpoint only ever names the *other* person
-// relative to whoever asks, so asking as each side in turn is what produces both names: the seed
-// call reveals the partner's id and nickname, and calling back as that partner names the seed.
-export async function fetchParticipants() {
-  const fallback = FALLBACK_PARTICIPANT_IDS.map((userId) => ({ userId, nickname: `사용자 ${userId}` }))
-  if (!CHAT_ROOM_ID || !BOOTSTRAP_USER_ID) return fallback.length ? fallback : null
-
-  try {
-    const seedId = Number(BOOTSTRAP_USER_ID)
-    const seen = await request('', { asUserId: seedId })
-    const partnerId = seen?.partner?.userId
-    if (!partnerId) return fallback
-    const mirrored = await request('', { asUserId: partnerId })
-    return [
-      { userId: seedId, nickname: mirrored?.partner?.nickname ?? `사용자 ${seedId}` },
-      { userId: partnerId, nickname: seen?.partner?.nickname ?? `사용자 ${partnerId}` },
-    ]
-  } catch (error) {
-    console.warn('Falling back to configured participant ids — could not read their names.', error)
-    return fallback.length ? fallback : null
+// This device's own nickname/photo, as returned by claimParticipant. fetchChatRoom's room endpoint
+// only ever names the *partner* relative to whoever asks (see pullRoom in App.jsx), so there is no
+// way to read "my own" profile back from the server — it has to be remembered locally from the
+// moment this device claimed it. Same storage pair as chooseUserId, for the same reason
+// (sessionStorage wins across tabs on one browser; localStorage survives a reload of just this tab).
+export function rememberMyProfile({ nickname, profileImageUrl }) {
+  const value = JSON.stringify({ nickname: nickname ?? null, profileImageUrl: profileImageUrl ?? null })
+  for (const store of ['sessionStorage', 'localStorage']) {
+    try {
+      window[store].setItem('momote.myProfile', value)
+    } catch {
+      // Storage unavailable — the profile still holds for this page load via the module-level cache.
+    }
   }
+  myProfileCache = JSON.parse(value)
+}
+
+let myProfileCache = null
+
+export function myProfile() {
+  if (myProfileCache) return myProfileCache
+  for (const store of ['sessionStorage', 'localStorage']) {
+    try {
+      const raw = window[store]?.getItem('momote.myProfile')
+      if (raw) return (myProfileCache = JSON.parse(raw))
+    } catch {
+      // Storage unavailable — fall through to the next store, or the no-profile-yet default below.
+    }
+  }
+  return { nickname: null, profileImageUrl: null }
 }
 
 // POST /api/chat-rooms/{id}/participants/claim — NOT YET IMPLEMENTED ON THE BACKEND. Requested
 // contract, for whoever picks this up on the backend team:
 //
 //   Request:  POST /api/chat-rooms/{roomId}/participants/claim
+//             Content-Type: multipart/form-data
 //             X-User-Id: <any known participant id in this room, e.g. the bootstrap id>
-//             { "nickname": "지민" }
-//   Response: { "userId": 2, "nickname": "지민" }
+//             fields: nickname (text, required)
+//                     profileImage (file, optional — image/*, suggest capping ~5MB; the client only
+//                       sends this when the person uploaded a real photo instead of keeping the
+//                       default silhouette, so it's fine for the server to skip storage work when
+//                       the part is absent)
+//   Response: { "userId": 2, "nickname": "지민", "profileImageUrl": "https://.../abc.jpg" }
+//             profileImageUrl is null/omitted when no photo was uploaded.
 //   Error:    409 if both of the room's participant slots already have a customised nickname
 //
-// Replaces the old two-card "사용자 A / 사용자 B" picker (see ParticipantPicker in App.jsx) with a
-// single name field: the person types their own name and the SERVER decides which of the room's two
-// fixed ids they become, by finding whichever slot's nickname is still the untouched seed value and
-// assigning that one. This has to be server-side and atomic — if the client instead read "which
-// slot looks unclaimed" and then wrote to it, two people submitting within the same moment could
-// both read "both slots free" and race onto the same id.
+// Also needs GET /api/chat-rooms/{id} to grow the same field on `partner` (profileImageUrl,
+// alongside the nickname it already returns) — that's the only way this device finds out the other
+// person's photo, the same way it already finds their nickname (see fetchChatRoom and pullRoom in
+// App.jsx).
 //
-// asUserId uses BOOTSTRAP_USER_ID the same way fetchParticipants' seed call does: this request is
-// what establishes which participant this device is, so it can't yet authenticate as that id.
-export async function claimParticipant(nickname) {
+// Replaces the old two-card "사용자 A / 사용자 B" picker (see ParticipantPicker in App.jsx) with a
+// single name field + optional photo: the person types their own name and the SERVER decides which
+// of the room's two fixed ids they become, by finding whichever slot's nickname is still the
+// untouched seed value and assigning that one. This has to be server-side and atomic — if the
+// client instead read "which slot looks unclaimed" and then wrote to it, two people submitting
+// within the same moment could both read "both slots free" and race onto the same id.
+//
+// asUserId uses BOOTSTRAP_USER_ID because this request is what establishes which participant this
+// device is — it can't yet authenticate as an id it doesn't have.
+export async function claimParticipant(nickname, { imageFile } = {}) {
   if (!CHAT_ROOM_ID || !BOOTSTRAP_USER_ID) {
     throw new Error('No chat room configured — cannot claim a participant slot.')
   }
+  const form = new FormData()
+  form.append('nickname', nickname)
+  if (imageFile) form.append('profileImage', imageFile)
   return request('/participants/claim', {
     method: 'POST',
-    body: { nickname },
+    formData: form,
     asUserId: Number(BOOTSTRAP_USER_ID),
   })
 }
 
-async function request(path, { method = 'GET', body, query, asUserId } = {}) {
+async function request(path, { method = 'GET', body, formData, query, asUserId } = {}) {
   const url = new URL(`${API_BASE_URL}/api/chat-rooms/${CHAT_ROOM_ID}${path}`)
   for (const [key, value] of Object.entries(query ?? {})) {
     if (value !== undefined && value !== null) url.searchParams.set(key, String(value))
@@ -203,9 +218,12 @@ async function request(path, { method = 'GET', body, query, asUserId } = {}) {
       // asUserId is only for the pre-choice participant lookup; everything else speaks as whoever
       // this device has been established to be.
       'X-User-Id': String(asUserId ?? USER_ID),
-      ...(body ? { 'Content-Type': 'application/json' } : {}),
+      // formData (claimParticipant's optional photo) must NOT get an explicit Content-Type — fetch
+      // sets its own multipart boundary from the FormData object, and overriding it here would drop
+      // that boundary and leave the server unable to parse the parts.
+      ...(body && !formData ? { 'Content-Type': 'application/json' } : {}),
     },
-    ...(body ? { body: JSON.stringify(body) } : {}),
+    body: formData ?? (body ? JSON.stringify(body) : undefined),
   })
 
   if (!response.ok) {
