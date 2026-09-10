@@ -11,14 +11,17 @@ import threadTenseGif from './assets/thread/tense.gif'
 import {
   chooseUserId,
   claimParticipant,
+  createRoom,
   currentUserId,
   fetchAiResults,
   fetchChatRoom,
   fetchEmotionAnalyses,
   fetchMessages,
   isBackendConfigured,
+  joinRoom,
   myProfile,
   needsParticipantChoice,
+  needsRoomChoice,
   newClientMessageId,
   rememberMyProfile,
   sendMessage as postMessage,
@@ -703,6 +706,163 @@ function CameraIcon({ className = '' }) {
   )
 }
 
+// Shown before ParticipantPicker, only when this device doesn't belong to any room yet (see
+// needsRoomChoice) — the legacy single fixed-room dev config (.env.local) skips this screen
+// entirely and goes straight to ParticipantPicker, unchanged.
+//
+// Two ways in: create a brand-new room (createRoom assigns this device the first of its two
+// participant slots immediately, before any nickname exists — see its comment in api.js) and share
+// the code it's given back, or join one with a code someone else already has. Either way, by the
+// time onRoomReady fires this device already has a room *and* a participant slot — only the
+// nickname/photo is still missing, which is exactly the state ParticipantPicker expects to run in.
+function RoomEntryScreen({ onRoomReady }) {
+  const [mode, setMode] = useState('choice') // 'choice' | 'creating' | 'created' | 'joining'
+  const [inviteCode, setInviteCode] = useState('')
+  const [createdCode, setCreatedCode] = useState(null)
+  const [error, setError] = useState(null)
+  const [copied, setCopied] = useState(false)
+
+  async function handleCreate() {
+    setError(null)
+    setMode('creating')
+    try {
+      const result = await createRoom()
+      setCreatedCode(result.inviteCode)
+      setMode('created')
+    } catch (err) {
+      console.warn('Could not create a room.', err)
+      setError('방을 만들지 못했어요. 다시 시도해 주세요.')
+      setMode('choice')
+    }
+  }
+
+  async function handleJoin() {
+    const code = inviteCode.trim()
+    if (!code || mode === 'creating' || mode === 'joining') return
+    setError(null)
+    setMode('joining')
+    try {
+      await joinRoom(code)
+      onRoomReady()
+    } catch (err) {
+      console.warn('Could not join a room.', err)
+      setError('초대코드를 확인해주세요.')
+      setMode('choice')
+    }
+  }
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(createdCode)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Clipboard API unavailable (permissions, insecure context) — the code is still on screen to
+      // copy by hand, so this just silently skips the one-tap convenience.
+    }
+  }
+
+  // Same IME guard as ParticipantPicker/the chat input.
+  function handleKeyDown(e) {
+    if (e.nativeEvent.isComposing || e.keyCode === 229) return
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      handleJoin()
+    }
+  }
+
+  if (mode === 'created') {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+        <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+          <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+            momote
+          </p>
+          <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+            방이 만들어졌어요
+          </p>
+          <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
+            이 코드를 상대방에게 공유해주세요
+          </p>
+
+          <div className="mt-[26px] flex w-full max-w-[280px] flex-col items-stretch gap-[10px]">
+            <button
+              type="button"
+              onClick={handleCopy}
+              className="w-full cursor-pointer rounded-[24px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-4 text-center text-[26px] font-bold tracking-[0.2em] text-[#562f3e] shadow-[0_2px_20px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97]"
+            >
+              {createdCode}
+            </button>
+            <p className="text-center text-[12px] font-medium text-[#a6868e]">
+              {copied ? '복사됐어요!' : '눌러서 복사하기'}
+            </p>
+            <button
+              type="button"
+              onClick={onRoomReady}
+              className="mt-[10px] w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97]"
+            >
+              다음
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  const busy = mode === 'creating' || mode === 'joining'
+
+  return (
+    <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+      <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+        <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+          momote
+        </p>
+        <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+          같이 쓸 방을 선택해주세요
+        </p>
+
+        <div className="mt-[30px] flex w-full max-w-[280px] flex-col items-stretch gap-[12px]">
+          <button
+            type="button"
+            onClick={handleCreate}
+            disabled={busy}
+            className="w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97] disabled:cursor-default disabled:opacity-50"
+          >
+            {mode === 'creating' ? '만드는 중...' : '새로운 방 만들기'}
+          </button>
+
+          <div className="my-[2px] flex items-center gap-[10px]">
+            <div className="h-[1px] flex-1 bg-[#f1c8d0]" />
+            <span className="text-[12px] font-medium text-[#a6868e]">또는</span>
+            <div className="h-[1px] flex-1 bg-[#f1c8d0]" />
+          </div>
+
+          <input
+            value={inviteCode}
+            onChange={(e) => setInviteCode(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="초대코드 입력"
+            disabled={busy}
+            className="w-full rounded-[24px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-4 text-center text-[16px] font-semibold text-[#562f3e] shadow-[0_2px_20px_rgba(255,207,219,0.7)] outline-none placeholder:text-[#c9a2a8] disabled:opacity-60"
+          />
+          <button
+            type="button"
+            onClick={handleJoin}
+            disabled={!inviteCode.trim() || busy}
+            className="w-full cursor-pointer rounded-[24px] border-[1.2px] border-[#f25597] bg-white/80 px-5 py-4 text-center text-[15px] font-semibold text-[#f25597] shadow-[0_2px_20px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97] disabled:cursor-default disabled:opacity-50"
+          >
+            {mode === 'joining' ? '입장하는 중...' : '초대코드로 입장하기'}
+          </button>
+        </div>
+
+        {error && (
+          <p className="mt-[24px] text-center text-[13px] font-medium text-[#a6868e]">{error}</p>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function ParticipantPicker({ onChoose }) {
   const [name, setName] = useState('')
   const [status, setStatus] = useState('idle') // 'idle' | 'submitting' | 'error'
@@ -844,6 +1004,9 @@ function ParticipantPicker({ onChoose }) {
 
 function App() {
   // Re-read on mount rather than at module scope so choosing re-renders straight into the chat.
+  // awaitingRoom gates RoomEntryScreen; the legacy single fixed-room dev config (.env.local) starts
+  // it false and skips straight to awaitingChoice, unchanged from before rooms were dynamic.
+  const [awaitingRoom, setAwaitingRoom] = useState(() => needsRoomChoice())
   const [awaitingChoice, setAwaitingChoice] = useState(() => needsParticipantChoice())
 
   const [messages, setMessages] = useState([])
@@ -1179,8 +1342,21 @@ function App() {
   const sheetHeightValue = isSheetOpen && hasSuggestion ? openSheetHeight : `${HEADER_FOOTPRINT_PX}px`
 
   // Below every hook, so the early return doesn't change how many run between renders. The effects
-  // above all sit behind `backendLive`, which is false until a participant is chosen, so nothing
-  // polls or classifies while the picker is up.
+  // above all sit behind `backendLive`, which is false until a room exists, a participant is chosen,
+  // and that profile is submitted, so nothing polls or classifies while either screen is up.
+  if (awaitingRoom) {
+    return (
+      <RoomEntryScreen
+        onRoomReady={() => {
+          setAwaitingRoom(false)
+          // createRoom/joinRoom already assigned USER_ID — re-derive fresh rather than trusting
+          // awaitingChoice's stale initial value (computed at mount, before any room existed, back
+          // when needsParticipantChoice necessarily read false).
+          setAwaitingChoice(needsParticipantChoice())
+        }}
+      />
+    )
+  }
   if (awaitingChoice) {
     return (
       <ParticipantPicker

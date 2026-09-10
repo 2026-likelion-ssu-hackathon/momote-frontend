@@ -59,11 +59,18 @@ function resolveId(queryKey, storageKey, envValue) {
 if (typeof window !== 'undefined') {
   try {
     if (new URLSearchParams(window.location.search).has('reset')) {
-      for (const store of ['sessionStorage', 'localStorage']) {
-        try {
-          window[store].removeItem('momote.userId')
-        } catch {
-          // Storage unavailable; there was nothing remembered to forget either.
+      // momote.myProfile goes with momote.userId, not on its own — a leftover nickname/photo from
+      // whoever this device used to be would otherwise hang around and get sent back to
+      // claimParticipant as if it were the *new* pick's profile. Deliberately leaves
+      // momote.chatRoomId alone: ?reset is for rehearsing which side of an already-fixed room this
+      // device is, not for leaving the room (see needsRoomChoice/RoomEntryScreen for that).
+      for (const key of ['momote.userId', 'momote.myProfile']) {
+        for (const store of ['sessionStorage', 'localStorage']) {
+          try {
+            window[store].removeItem(key)
+          } catch {
+            // Storage unavailable; there was nothing remembered to forget either.
+          }
         }
       }
     }
@@ -72,7 +79,7 @@ if (typeof window !== 'undefined') {
   }
 }
 
-const CHAT_ROOM_ID = resolveId('roomId', 'momote.chatRoomId', import.meta.env.VITE_CHAT_ROOM_ID)
+let CHAT_ROOM_ID = resolveId('roomId', 'momote.chatRoomId', import.meta.env.VITE_CHAT_ROOM_ID)
 
 // Deliberately no env fallback: an unchosen user is the signal that this device should be asked who
 // it is (see ParticipantPicker in App.jsx). Falling back to the build value would silently make
@@ -103,20 +110,52 @@ if (typeof window !== 'undefined' && window.history?.replaceState) {
   }
 }
 
-// Without a room and a user there is nothing to call, and every request would 404. App.jsx checks
-// this and keeps running its local demo behaviour instead of showing a broken screen, so the build
-// stays presentable until the team provisions real IDs.
+// Without a room, a user, and a completed profile there is nothing to call, and every request would
+// 404 or show a nickname-less stranger. App.jsx checks this and keeps running its local demo
+// behaviour instead of showing a broken screen, so the build stays presentable until all three are
+// in place. The profile check matters because the two-step flow (RoomEntryScreen, then
+// ParticipantPicker) can leave USER_ID set — createRoom/joinRoom assign it immediately, before the
+// nickname/photo step runs — without a nickname having been chosen yet; see needsParticipantChoice.
 export function isBackendConfigured() {
-  return Boolean(CHAT_ROOM_ID && USER_ID)
+  return Boolean(CHAT_ROOM_ID && USER_ID && myProfile().nickname)
 }
 
 export function currentUserId() {
   return Number(USER_ID)
 }
 
-// Whether the room is known but nobody on this device has said which participant they are.
+// Whether a room is known but nobody on this device has finished setting up a profile in it. Two
+// paths land here:
+//   - the legacy single-room dev config (CHAT_ROOM_ID from .env.local): USER_ID isn't set at all
+//     yet, exactly like before this file supported multiple rooms.
+//   - a room just created or joined via RoomEntryScreen: USER_ID is already set (createRoom/joinRoom
+//     assign this device's slot immediately, since the backend has to hand out an id to authenticate
+//     the *next* request with), but no nickname/photo has been submitted for it yet.
+// Both should show ParticipantPicker, so this checks profile completion rather than just USER_ID.
 export function needsParticipantChoice() {
-  return Boolean(CHAT_ROOM_ID) && !USER_ID
+  if (!CHAT_ROOM_ID) return false
+  if (!USER_ID) return true
+  return !myProfile().nickname
+}
+
+// Whether no room has been resolved on this device at all yet — the state RoomEntryScreen exists
+// for. False whenever CHAT_ROOM_ID came from .env.local (the legacy single fixed-room dev config),
+// so that path skips straight to needsParticipantChoice exactly as it always has.
+export function needsRoomChoice() {
+  return !CHAT_ROOM_ID
+}
+
+// Records which room this device belongs to, the same way chooseUserId records which participant —
+// set once, by RoomEntryScreen, and persisted so a reload doesn't ask again.
+export function chooseRoomId(roomId) {
+  CHAT_ROOM_ID = String(roomId)
+  for (const store of ['sessionStorage', 'localStorage']) {
+    try {
+      window[store].setItem('momote.chatRoomId', CHAT_ROOM_ID)
+    } catch {
+      // Storage unavailable — the choice still holds for this page load.
+    }
+  }
 }
 
 // Records the choice for this tab and this browser, so the picker is a once-per-device question.
@@ -163,12 +202,59 @@ export function myProfile() {
   return { nickname: null, profileImageUrl: null }
 }
 
+// POST /api/chat-rooms — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
+//
+//   Request:  POST /api/chat-rooms   (no body — nobody has an identity yet, that's the point of it)
+//   Response: { "roomId": 42, "userId": 1, "inviteCode": "7F3K9X" }
+//
+// Creates a brand-new, empty room and immediately assigns this device the first of its two
+// participant slots — before any nickname is set. It has to work this way (rather than leaving
+// USER_ID unresolved until claimParticipant, the way the legacy fixed-room flow does) because a
+// fresh room has no pre-seeded participants for claimParticipant's "find the still-default slot"
+// trick to find — someone has to be told an id to authenticate as *before* they can name themselves.
+// chooseRoomId/chooseUserId are called on success so the very next request (claimParticipant,
+// filling in the name/photo) already authenticates correctly.
+export async function createRoom() {
+  const response = await fetch(`${API_BASE_URL}/api/chat-rooms`, { method: 'POST' })
+  if (!response.ok) {
+    throw new Error(`POST /api/chat-rooms responded ${response.status}`)
+  }
+  const result = await response.json()
+  chooseRoomId(result.roomId)
+  chooseUserId(result.userId)
+  return result
+}
+
+// POST /api/chat-rooms/join — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
+//
+//   Request:  POST /api/chat-rooms/join   { "inviteCode": "7F3K9X" }
+//   Response: { "roomId": 42, "userId": 2 }
+//   Error:    404 if the code doesn't match any room, 409 if that room already has two participants
+//
+// The other half of createRoom: joins the room the code's creator shared, and gets assigned
+// whichever slot they aren't. Same reasoning as createRoom for assigning USER_ID immediately rather
+// than waiting for claimParticipant.
+export async function joinRoom(inviteCode) {
+  const response = await fetch(`${API_BASE_URL}/api/chat-rooms/join`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ inviteCode }),
+  })
+  if (!response.ok) {
+    throw new Error(`POST /api/chat-rooms/join responded ${response.status}`)
+  }
+  const result = await response.json()
+  chooseRoomId(result.roomId)
+  chooseUserId(result.userId)
+  return result
+}
+
 // POST /api/chat-rooms/{id}/participants/claim — NOT YET IMPLEMENTED ON THE BACKEND. Requested
 // contract, for whoever picks this up on the backend team:
 //
 //   Request:  POST /api/chat-rooms/{roomId}/participants/claim
 //             Content-Type: multipart/form-data
-//             X-User-Id: <any known participant id in this room, e.g. the bootstrap id>
+//             X-User-Id: <this device's own id — see below for where that comes from>
 //             fields: nickname (text, required)
 //                     profileImage (file, optional — image/*, suggest capping ~5MB; the client only
 //                       sends this when the person uploaded a real photo instead of keeping the
@@ -183,17 +269,19 @@ export function myProfile() {
 // person's photo, the same way it already finds their nickname (see fetchChatRoom and pullRoom in
 // App.jsx).
 //
-// Replaces the old two-card "사용자 A / 사용자 B" picker (see ParticipantPicker in App.jsx) with a
-// single name field + optional photo: the person types their own name and the SERVER decides which
-// of the room's two fixed ids they become, by finding whichever slot's nickname is still the
-// untouched seed value and assigning that one. This has to be server-side and atomic — if the
-// client instead read "which slot looks unclaimed" and then wrote to it, two people submitting
-// within the same moment could both read "both slots free" and race onto the same id.
-//
-// asUserId uses BOOTSTRAP_USER_ID because this request is what establishes which participant this
-// device is — it can't yet authenticate as an id it doesn't have.
+// Fills in the name/photo for whichever slot this device already holds. "Already holds" has two
+// different sources depending on how this device got here:
+//   - created or joined a room via RoomEntryScreen just now (see createRoom/joinRoom): USER_ID is
+//     already set, from that response — this request just authenticates as USER_ID like any other.
+//   - the legacy single fixed-room dev config: nobody has picked a slot yet, so this request has to
+//     authenticate as *some* known-valid id (BOOTSTRAP_USER_ID, from env) to ask the server "which of
+//     the room's two pre-seeded slots is still untouched — make that one me." That decision has to be
+//     server-side and atomic: if the client instead read "which slot looks unclaimed" and then wrote
+//     to it, two people submitting within the same moment could both read "both slots free" and race
+//     onto the same id.
 export async function claimParticipant(nickname, { imageFile } = {}) {
-  if (!CHAT_ROOM_ID || !BOOTSTRAP_USER_ID) {
+  const authId = USER_ID ?? BOOTSTRAP_USER_ID
+  if (!CHAT_ROOM_ID || !authId) {
     throw new Error('No chat room configured — cannot claim a participant slot.')
   }
   const form = new FormData()
@@ -202,7 +290,7 @@ export async function claimParticipant(nickname, { imageFile } = {}) {
   return request('/participants/claim', {
     method: 'POST',
     formData: form,
-    asUserId: Number(BOOTSTRAP_USER_ID),
+    asUserId: Number(authId),
   })
 }
 
