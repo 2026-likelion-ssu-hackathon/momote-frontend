@@ -9,6 +9,7 @@ import threadNeutralGif from './assets/thread/neutral.gif'
 import threadTangledGif from './assets/thread/tangled.gif'
 import threadTenseGif from './assets/thread/tense.gif'
 import {
+  acceptJoinRequest,
   chooseUserId,
   claimParticipant,
   createRoom,
@@ -16,14 +17,17 @@ import {
   fetchAiResults,
   fetchChatRoom,
   fetchEmotionAnalyses,
+  fetchJoinRequestStatus,
   fetchMessages,
+  fetchPendingJoinRequests,
   isBackendConfigured,
-  joinRoom,
   myProfile,
   needsParticipantChoice,
   needsRoomChoice,
   newClientMessageId,
+  rejectJoinRequest,
   rememberMyProfile,
+  requestToJoin,
   sendMessage as postMessage,
   suggestionPropsFromResult,
   suggestionTypeFromResultType,
@@ -724,44 +728,43 @@ function CameraIcon({ className = '' }) {
 // legacy fixed-room path uses. Done eagerly (create/join, immediately followed by the claim) rather
 // than waiting for a separate confirmation tap, so that by the time the invite code is on screen to
 // share, this device's own nickname/photo are already registered — nothing left pending afterward.
+// How often the two waiting screens below check for something to react to — the room creator
+// checking for someone wanting in, and a requester checking whether they've been let in. Same order
+// of magnitude as MESSAGE_POLL_MS; a touch slower since neither side is mid-conversation yet, there's
+// no reply latency to hide.
+const ROOM_JOIN_REQUEST_POLL_MS = 2000
+
 function RoomEntryScreen({ profile, onRoomReady }) {
-  const [mode, setMode] = useState('choice') // 'choice' | 'creating' | 'created' | 'joining' | 'profile-error'
+  // 'choice' | 'creating' | 'created' | 'reviewing' | 'profile-error'   — room creator (A)
+  // | 'joining' | 'awaiting-approval' | 'rejected'                     — requester (B)
+  const [mode, setMode] = useState('choice')
   const [inviteCode, setInviteCode] = useState('')
   const [createdCode, setCreatedCode] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
-  // Set the moment createRoom/joinRoom actually succeeds — kept separate from `mode` so a profile
-  // submission failure (see finishRoomEntry) can retry *only* that step. Without this, retrying after
-  // a claim failure would call createRoom/joinRoom again and leave the first room behind, created but
-  // with nobody's name ever registered in it.
-  const [roomKind, setRoomKind] = useState(null) // null | 'created' | 'joined'
+  // The join request A is currently looking at (see the polling effect below) — its nickname/photo
+  // are exactly what requestToJoin submitted, never A's own.
+  const [pendingRequest, setPendingRequest] = useState(null)
+  // B's own request id, once requestToJoin returns one — what the awaiting-approval poll checks on.
+  const [joinRequestId, setJoinRequestId] = useState(null)
+  const [decisionBusy, setDecisionBusy] = useState(false)
 
-  // Records what the server actually stored (same as ParticipantPicker's legacy-path branch), so
-  // later reads of myProfile() see this device's real, server-confirmed nickname/photo.
-  async function submitProfile() {
-    const result = await claimParticipant(profile.nickname, { imageFile: profile.imageFile })
-    rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
-  }
+  // --- Room creator (A): make the room, register *my own* profile in it, then wait for someone to
+  // ask in. Rejecting an asker doesn't give up the room — it just goes back to waiting (see
+  // handleReject), since the point of reviewing is picking the right person, not the first one. ---
 
-  // Submits the profile into whichever room create/join just resolved. This is itself the retry
-  // target on failure — see the profile-error screen's button below — so a hiccup here never
-  // re-triggers createRoom/joinRoom.
-  //
-  // Takes `kind` as an argument rather than reading the roomKind state directly, because the two
-  // call sites need it at different points relative to setRoomKind: handleCreate/handleJoin call
-  // this in the same synchronous handler as setRoomKind(kind), and React state updates aren't
-  // applied until the next render — roomKind would still read its old (null) value right then. The
-  // retry button's onClick, by contrast, fires on a later render where roomKind has long since
-  // settled, so it reads the state directly instead.
-  async function finishRoomEntry(kind) {
+  async function submitOwnProfile() {
     setError(null)
-    setMode(kind === 'created' ? 'creating' : 'joining')
+    setMode('creating')
     try {
-      await submitProfile()
-      if (kind === 'created') setMode('created')
-      else onRoomReady()
+      const result = await claimParticipant(profile.nickname, { imageFile: profile.imageFile })
+      rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
+      setMode('created')
     } catch (err) {
-      console.warn('Room resolved, but could not submit the profile into it.', err)
+      // The room itself already exists by the time this can fail — only my own nickname/photo
+      // didn't make it in, so the profile-error screen's retry button calls this again directly
+      // rather than re-running createRoom and orphaning the room just made.
+      console.warn('Room created, but could not submit my profile into it.', err)
       setError('프로필 등록에 실패했어요.')
       setMode('profile-error')
     }
@@ -773,32 +776,128 @@ function RoomEntryScreen({ profile, onRoomReady }) {
     try {
       const result = await createRoom()
       setCreatedCode(result.inviteCode)
-      setRoomKind('created')
     } catch (err) {
       console.warn('Could not create a room.', err)
       setError('방을 만들지 못했어요. 다시 시도해 주세요.')
       setMode('choice')
       return
     }
-    await finishRoomEntry('created')
+    await submitOwnProfile()
   }
+
+  // While the invite code is on screen, keep checking whether anyone's asked to join. Stops the
+  // moment there's a request to actually look at — 'reviewing' has its own poll-free screen, since
+  // showing a decision for someone who already un-asked (or a second asker) mid-review would be
+  // confusing; a fresh check only resumes once that decision is made (back to 'created', or onward).
+  useEffect(() => {
+    if (mode !== 'created') return
+    let cancelled = false
+    let timerId
+    async function poll() {
+      try {
+        const pending = await fetchPendingJoinRequests()
+        if (cancelled) return
+        if (pending?.length) {
+          setPendingRequest(pending[0])
+          setMode('reviewing')
+          return
+        }
+      } catch (err) {
+        console.warn('Could not check for join requests.', err)
+        // Transient — one failed check shouldn't kick the room creator off the invite-code screen.
+      }
+      timerId = setTimeout(poll, ROOM_JOIN_REQUEST_POLL_MS)
+    }
+    poll()
+    return () => {
+      cancelled = true
+      clearTimeout(timerId)
+    }
+  }, [mode])
+
+  async function handleAccept() {
+    if (!pendingRequest || decisionBusy) return
+    setDecisionBusy(true)
+    setError(null)
+    try {
+      await acceptJoinRequest(pendingRequest.requestId)
+      onRoomReady()
+    } catch (err) {
+      console.warn('Could not accept the join request.', err)
+      setError('수락에 실패했어요. 다시 시도해 주세요.')
+      setDecisionBusy(false)
+    }
+  }
+
+  async function handleReject() {
+    if (!pendingRequest || decisionBusy) return
+    setDecisionBusy(true)
+    setError(null)
+    try {
+      await rejectJoinRequest(pendingRequest.requestId)
+      setPendingRequest(null)
+      setDecisionBusy(false)
+      setMode('created') // resumes the polling effect above, still waiting on the same code
+    } catch (err) {
+      console.warn('Could not reject the join request.', err)
+      setError('거절에 실패했어요. 다시 시도해 주세요.')
+      setDecisionBusy(false)
+    }
+  }
+
+  // --- Requester (B): submit the profile *with* the invite code in one shot (there's no slot to
+  // claim into separately until A accepts), then wait for the decision. ---
 
   async function handleJoin() {
     const code = inviteCode.trim()
-    if (!code || mode === 'creating' || mode === 'joining') return
+    if (!code || mode === 'joining') return
     setError(null)
     setMode('joining')
     try {
-      await joinRoom(code)
-      setRoomKind('joined')
+      const result = await requestToJoin(code, profile)
+      setJoinRequestId(result.requestId)
+      setMode('awaiting-approval')
     } catch (err) {
-      console.warn('Could not join a room.', err)
+      console.warn('Could not request to join a room.', err)
       setError('초대코드를 확인해주세요.')
       setMode('choice')
-      return
     }
-    await finishRoomEntry('joined')
   }
+
+  useEffect(() => {
+    if (mode !== 'awaiting-approval' || !joinRequestId) return
+    let cancelled = false
+    let timerId
+    async function poll() {
+      try {
+        const result = await fetchJoinRequestStatus(joinRequestId)
+        if (cancelled) return
+        if (result.status === 'ACCEPTED') {
+          // fetchJoinRequestStatus already called chooseRoomId/chooseUserId — this is the other
+          // half of that, the same nickname/photo bookkeeping submitOwnProfile does for the
+          // creator. Without it, needsParticipantChoice() would still read true (a room and a user
+          // id, but no remembered nickname) and send this device straight back to the profile
+          // screen it already filled in once.
+          rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
+          onRoomReady()
+          return
+        }
+        if (result.status === 'REJECTED') {
+          setMode('rejected')
+          return
+        }
+      } catch (err) {
+        console.warn('Could not check the join request status.', err)
+        // Transient — keep waiting rather than bouncing back to the choice screen over one miss.
+      }
+      timerId = setTimeout(poll, ROOM_JOIN_REQUEST_POLL_MS)
+    }
+    poll()
+    return () => {
+      cancelled = true
+      clearTimeout(timerId)
+    }
+  }, [mode, joinRequestId, onRoomReady, profile.nickname])
 
   async function handleCopy() {
     try {
@@ -820,8 +919,6 @@ function RoomEntryScreen({ profile, onRoomReady }) {
     }
   }
 
-  // The room itself already exists at this point (roomKind is set) — only the profile submission
-  // failed, so the button below retries just that, not createRoom/joinRoom.
   if (mode === 'profile-error') {
     return (
       <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
@@ -838,12 +935,60 @@ function RoomEntryScreen({ profile, onRoomReady }) {
           <div className="mt-[26px] w-full max-w-[280px]">
             <button
               type="button"
-              onClick={() => finishRoomEntry(roomKind)}
+              onClick={submitOwnProfile}
               className="w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97]"
             >
               다시 시도
             </button>
           </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (mode === 'reviewing' && pendingRequest) {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+        <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+          <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+            momote
+          </p>
+          <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+            입장 요청이 왔어요
+          </p>
+
+          <div className="mt-[26px] size-[92px] shrink-0 overflow-hidden rounded-full border-[1.2px] border-[#f4e0e5] bg-white/80 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
+            <img src={pendingRequest.profileImageUrl ?? avatarPink} alt="" className="size-full object-cover" />
+          </div>
+          <p className="mt-[14px] text-center text-[18px] font-semibold text-[#562f3e]">
+            {pendingRequest.nickname}
+          </p>
+          <p className="mt-[4px] text-center text-[13px] font-medium text-[#a6868e]">
+            이 사람의 입장을 수락할까요?
+          </p>
+
+          <div className="mt-[26px] flex w-full max-w-[280px] gap-[10px]">
+            <button
+              type="button"
+              onClick={handleReject}
+              disabled={decisionBusy}
+              className="flex-1 cursor-pointer rounded-[24px] border-[1.2px] border-[#f4e0e5] bg-white/80 px-5 py-4 text-center text-[15px] font-semibold text-[#7d6a71] shadow-[0_2px_20px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97] disabled:cursor-default disabled:opacity-50"
+            >
+              거절
+            </button>
+            <button
+              type="button"
+              onClick={handleAccept}
+              disabled={decisionBusy}
+              className="flex-1 cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97] disabled:cursor-default disabled:opacity-50"
+            >
+              수락
+            </button>
+          </div>
+
+          {error && (
+            <p className="mt-[24px] text-center text-[13px] font-medium text-[#a6868e]">{error}</p>
+          )}
         </div>
       </div>
     )
@@ -874,12 +1019,58 @@ function RoomEntryScreen({ profile, onRoomReady }) {
             <p className="text-center text-[12px] font-medium text-[#a6868e]">
               {copied ? '복사됐어요!' : '눌러서 복사하기'}
             </p>
+          </div>
+
+          {/* No manual "다음" here on purpose — the room creator moves on only once they've
+              reviewed and accepted someone (see the 'reviewing' screen), not just by tapping
+              through, which is the whole point of adding a review step. */}
+          <p className="mt-[26px] text-center text-[13px] font-medium text-[#a6868e]">
+            상대방이 입장을 요청하면 알려드릴게요
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (mode === 'awaiting-approval') {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+        <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+          <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+            momote
+          </p>
+          <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+            상대방의 수락을 기다리는 중...
+          </p>
+          <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
+            상대방이 프로필을 확인하고 있어요
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  if (mode === 'rejected') {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+        <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+          <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+            momote
+          </p>
+          <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+            입장이 거절됐어요
+          </p>
+          <div className="mt-[26px] w-full max-w-[280px]">
             <button
               type="button"
-              onClick={onRoomReady}
-              className="mt-[10px] w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97]"
+              onClick={() => {
+                setMode('choice')
+                setInviteCode('')
+                setJoinRequestId(null)
+              }}
+              className="w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97]"
             >
-              다음
+              다시 시도
             </button>
           </div>
         </div>
@@ -929,7 +1120,7 @@ function RoomEntryScreen({ profile, onRoomReady }) {
             disabled={!inviteCode.trim() || busy}
             className="w-full cursor-pointer rounded-[24px] border-[1.2px] border-[#f25597] bg-white/80 px-5 py-4 text-center text-[15px] font-semibold text-[#f25597] shadow-[0_2px_20px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97] disabled:cursor-default disabled:opacity-50"
           >
-            {mode === 'joining' ? '입장하는 중...' : '초대코드로 입장하기'}
+            {mode === 'joining' ? '요청하는 중...' : '초대코드로 입장하기'}
           </button>
         </div>
 
