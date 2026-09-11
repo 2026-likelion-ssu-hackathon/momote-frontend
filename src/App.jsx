@@ -721,11 +721,16 @@ function CameraIcon({ className = '' }) {
 // than waiting for a separate confirmation tap, so that by the time the invite code is on screen to
 // share, this device's own nickname/photo are already registered — nothing left pending afterward.
 function RoomEntryScreen({ profile, onRoomReady }) {
-  const [mode, setMode] = useState('choice') // 'choice' | 'creating' | 'created' | 'joining'
+  const [mode, setMode] = useState('choice') // 'choice' | 'creating' | 'created' | 'joining' | 'profile-error'
   const [inviteCode, setInviteCode] = useState('')
   const [createdCode, setCreatedCode] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
+  // Set the moment createRoom/joinRoom actually succeeds — kept separate from `mode` so a profile
+  // submission failure (see finishRoomEntry) can retry *only* that step. Without this, retrying after
+  // a claim failure would call createRoom/joinRoom again and leave the first room behind, created but
+  // with nobody's name ever registered in it.
+  const [roomKind, setRoomKind] = useState(null) // null | 'created' | 'joined'
 
   // Records what the server actually stored (same as ParticipantPicker's legacy-path branch), so
   // later reads of myProfile() see this device's real, server-confirmed nickname/photo.
@@ -734,19 +739,44 @@ function RoomEntryScreen({ profile, onRoomReady }) {
     rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
   }
 
+  // Submits the profile into whichever room create/join just resolved. This is itself the retry
+  // target on failure — see the profile-error screen's button below — so a hiccup here never
+  // re-triggers createRoom/joinRoom.
+  //
+  // Takes `kind` as an argument rather than reading the roomKind state directly, because the two
+  // call sites need it at different points relative to setRoomKind: handleCreate/handleJoin call
+  // this in the same synchronous handler as setRoomKind(kind), and React state updates aren't
+  // applied until the next render — roomKind would still read its old (null) value right then. The
+  // retry button's onClick, by contrast, fires on a later render where roomKind has long since
+  // settled, so it reads the state directly instead.
+  async function finishRoomEntry(kind) {
+    setError(null)
+    setMode(kind === 'created' ? 'creating' : 'joining')
+    try {
+      await submitProfile()
+      if (kind === 'created') setMode('created')
+      else onRoomReady()
+    } catch (err) {
+      console.warn('Room resolved, but could not submit the profile into it.', err)
+      setError('프로필 등록에 실패했어요.')
+      setMode('profile-error')
+    }
+  }
+
   async function handleCreate() {
     setError(null)
     setMode('creating')
     try {
       const result = await createRoom()
-      await submitProfile()
       setCreatedCode(result.inviteCode)
-      setMode('created')
+      setRoomKind('created')
     } catch (err) {
       console.warn('Could not create a room.', err)
       setError('방을 만들지 못했어요. 다시 시도해 주세요.')
       setMode('choice')
+      return
     }
+    await finishRoomEntry('created')
   }
 
   async function handleJoin() {
@@ -756,13 +786,14 @@ function RoomEntryScreen({ profile, onRoomReady }) {
     setMode('joining')
     try {
       await joinRoom(code)
-      await submitProfile()
-      onRoomReady()
+      setRoomKind('joined')
     } catch (err) {
       console.warn('Could not join a room.', err)
       setError('초대코드를 확인해주세요.')
       setMode('choice')
+      return
     }
+    await finishRoomEntry('joined')
   }
 
   async function handleCopy() {
@@ -783,6 +814,35 @@ function RoomEntryScreen({ profile, onRoomReady }) {
       e.preventDefault()
       handleJoin()
     }
+  }
+
+  // The room itself already exists at this point (roomKind is set) — only the profile submission
+  // failed, so the button below retries just that, not createRoom/joinRoom.
+  if (mode === 'profile-error') {
+    return (
+      <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
+        <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+          <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
+            momote
+          </p>
+          <p className="mt-[26px] font-['MemomentKkukkukk'] text-[20px] tracking-[0.2px] text-[#7d6a71]">
+            입장은 됐지만 프로필 등록에 실패했어요
+          </p>
+          <p className="mt-[6px] text-center text-[13px] font-medium text-[#a6868e]">
+            네트워크 상태를 확인하고 다시 시도해주세요
+          </p>
+          <div className="mt-[26px] w-full max-w-[280px]">
+            <button
+              type="button"
+              onClick={() => finishRoomEntry(roomKind)}
+              className="w-full cursor-pointer rounded-[24px] bg-[#f25597] px-5 py-4 text-center text-[15px] font-semibold text-white shadow-[0_4px_14px_rgba(242,85,151,0.35)] transition-transform duration-[120ms] ease-out hover:scale-[1.02] active:scale-[0.97]"
+            >
+              다시 시도
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   if (mode === 'created') {
