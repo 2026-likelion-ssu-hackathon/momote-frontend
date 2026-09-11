@@ -225,28 +225,86 @@ export async function createRoom() {
   return result
 }
 
-// POST /api/chat-rooms/join — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
+// POST /api/chat-rooms/join-requests — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
 //
-//   Request:  POST /api/chat-rooms/join   { "inviteCode": "7F3K9X" }
-//   Response: { "roomId": 42, "userId": 2 }
+//   Request:  POST /api/chat-rooms/join-requests
+//             Content-Type: multipart/form-data
+//             fields: inviteCode (text, required), nickname (text, required),
+//                     profileImage (file, optional — same rules as claimParticipant's)
+//   Response: { "requestId": 55, "roomId": 42, "status": "PENDING" }
 //   Error:    404 if the code doesn't match any room, 409 if that room already has two participants
 //
-// The other half of createRoom: joins the room the code's creator shared, and gets assigned
-// whichever slot they aren't. Same reasoning as createRoom for assigning USER_ID immediately rather
-// than waiting for claimParticipant.
-export async function joinRoom(inviteCode) {
-  const response = await fetch(`${API_BASE_URL}/api/chat-rooms/join`, {
+// Replaces the old joinRoom, which assigned a participant slot the instant the code was entered.
+// Entering a code now creates a PENDING request instead — the room's creator has to review the
+// name/photo and accept it (see acceptJoinRequest) before this device becomes a real participant.
+// No auth header: this device isn't a participant of anything yet, which is the whole point.
+export async function requestToJoin(inviteCode, { nickname, imageFile } = {}) {
+  const form = new FormData()
+  form.append('inviteCode', inviteCode)
+  form.append('nickname', nickname)
+  if (imageFile) form.append('profileImage', imageFile)
+  const response = await fetch(`${API_BASE_URL}/api/chat-rooms/join-requests`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ inviteCode }),
+    body: form,
   })
   if (!response.ok) {
-    throw new Error(`POST /api/chat-rooms/join responded ${response.status}`)
+    throw new Error(`POST /api/chat-rooms/join-requests responded ${response.status}`)
+  }
+  return response.json()
+}
+
+// GET /api/chat-rooms/join-requests/{requestId} — NOT YET IMPLEMENTED ON THE BACKEND. Polled by the
+// requesting device while it waits on the room creator's decision — see RoomEntryScreen's
+// 'awaiting-approval' mode. No auth: requestId itself is the only thing that has to be known to
+// check on it, the same way a request only this device has ever seen is normally enough.
+//
+//   Response: { "requestId": 55, "status": "PENDING" | "ACCEPTED" | "REJECTED", "roomId": 42,
+//               "userId": 2, "nickname": "지민", "profileImageUrl": "https://.../abc.jpg" }
+//             roomId/userId/nickname/profileImageUrl are present only once status is ACCEPTED —
+//             that's this device's real, now-registered identity, echoing back exactly what
+//             requestToJoin submitted (mirroring what claimParticipant's response does for the
+//             legacy/creator paths). chooseRoomId/chooseUserId are called here, once accepted, for
+//             the same reason they're called inside createRoom; the caller still has to call
+//             rememberMyProfile itself with nickname/profileImageUrl, the same as every other path.
+export async function fetchJoinRequestStatus(requestId) {
+  const response = await fetch(`${API_BASE_URL}/api/chat-rooms/join-requests/${requestId}`)
+  if (!response.ok) {
+    throw new Error(`GET /api/chat-rooms/join-requests/${requestId} responded ${response.status}`)
   }
   const result = await response.json()
-  chooseRoomId(result.roomId)
-  chooseUserId(result.userId)
+  if (result.status === 'ACCEPTED') {
+    chooseRoomId(result.roomId)
+    chooseUserId(result.userId)
+  }
   return result
+}
+
+// GET /api/chat-rooms/{id}/join-requests?status=PENDING — NOT YET IMPLEMENTED ON THE BACKEND.
+// Polled by the room creator while the invite-code screen is up, to notice someone wanting in — see
+// RoomEntryScreen's polling effect in the 'created' mode. Uses the shared `request` helper, so it
+// authenticates as this device's own USER_ID (set by createRoom) the same way every other in-room
+// call does — no separate id needed since by the time this runs, CHAT_ROOM_ID/USER_ID are already
+// this device's own.
+//
+//   Response: [{ "requestId": 55, "nickname": "지민", "profileImageUrl": "...", "requestedAt": "..." }]
+//             empty array when nobody's asked yet.
+export function fetchPendingJoinRequests() {
+  return request('/join-requests', { query: { status: 'PENDING' } })
+}
+
+// POST /api/chat-rooms/{id}/join-requests/{requestId}/accept — NOT YET IMPLEMENTED ON THE BACKEND.
+// This is the moment the requester actually becomes a real participant — assigned the room's other
+// userId slot, with the nickname/photo they submitted in requestToJoin registered directly (no
+// separate claimParticipant call on their end; they never had a slot to claim into before now).
+//
+//   Response: { "requestId": 55, "userId": 2, "status": "ACCEPTED" }
+export function acceptJoinRequest(requestId) {
+  return request(`/join-requests/${requestId}/accept`, { method: 'POST' })
+}
+
+// POST /api/chat-rooms/{id}/join-requests/{requestId}/reject — NOT YET IMPLEMENTED ON THE BACKEND.
+export function rejectJoinRequest(requestId) {
+  return request(`/join-requests/${requestId}/reject`, { method: 'POST' })
 }
 
 // POST /api/chat-rooms/{id}/participants/claim — NOT YET IMPLEMENTED ON THE BACKEND. Requested
