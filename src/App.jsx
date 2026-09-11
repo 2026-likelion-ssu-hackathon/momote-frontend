@@ -715,18 +715,31 @@ function CameraIcon({ className = '' }) {
 // the code it's given back, or join one with a code someone else already has. Either way, by the
 // time onRoomReady fires this device already has a room *and* a participant slot — only the
 // nickname/photo is still missing, which is exactly the state ParticipantPicker expects to run in.
-function RoomEntryScreen({ onRoomReady }) {
+// `profile` is what ParticipantPicker collected before any room existed (see its onProfileCollected)
+// — this screen submits it the moment a room actually does, via the same claimParticipant the
+// legacy fixed-room path uses. Done eagerly (create/join, immediately followed by the claim) rather
+// than waiting for a separate confirmation tap, so that by the time the invite code is on screen to
+// share, this device's own nickname/photo are already registered — nothing left pending afterward.
+function RoomEntryScreen({ profile, onRoomReady }) {
   const [mode, setMode] = useState('choice') // 'choice' | 'creating' | 'created' | 'joining'
   const [inviteCode, setInviteCode] = useState('')
   const [createdCode, setCreatedCode] = useState(null)
   const [error, setError] = useState(null)
   const [copied, setCopied] = useState(false)
 
+  // Records what the server actually stored (same as ParticipantPicker's legacy-path branch), so
+  // later reads of myProfile() see this device's real, server-confirmed nickname/photo.
+  async function submitProfile() {
+    const result = await claimParticipant(profile.nickname, { imageFile: profile.imageFile })
+    rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
+  }
+
   async function handleCreate() {
     setError(null)
     setMode('creating')
     try {
       const result = await createRoom()
+      await submitProfile()
       setCreatedCode(result.inviteCode)
       setMode('created')
     } catch (err) {
@@ -743,6 +756,7 @@ function RoomEntryScreen({ onRoomReady }) {
     setMode('joining')
     try {
       await joinRoom(code)
+      await submitProfile()
       onRoomReady()
     } catch (err) {
       console.warn('Could not join a room.', err)
@@ -863,7 +877,16 @@ function RoomEntryScreen({ onRoomReady }) {
   )
 }
 
-function ParticipantPicker({ onChoose }) {
+// Two different callers, because the room can come before or after this screen depending on the
+// device's path (see App() and RoomEntryScreen):
+//   - onProfileCollected(profile): no room exists yet — this device is a couple of steps from
+//     having one, so there's nothing to claim into. Just hands the typed name/photo upward, and
+//     RoomEntryScreen submits it once a room actually exists.
+//   - onChoose(userId): the legacy single fixed-room dev config — a room already exists (.env.local
+//     set it), so this claims into it directly, exactly as before this screen could ever run first.
+// handleSubmit picks between the two based on needsRoomChoice(), so callers only need to pass
+// whichever one applies to how this device got here.
+function ParticipantPicker({ onChoose, onProfileCollected }) {
   const [name, setName] = useState('')
   const [status, setStatus] = useState('idle') // 'idle' | 'submitting' | 'error'
   const [imageFile, setImageFile] = useState(null)
@@ -911,6 +934,14 @@ function ParticipantPicker({ onChoose }) {
   async function handleSubmit() {
     const nickname = name.trim()
     if (!nickname || status === 'submitting') return
+
+    if (needsRoomChoice()) {
+      // No room to claim into yet — RoomEntryScreen does the actual claimParticipant call once one
+      // exists, so this is just handing the input upward, not a network call.
+      onProfileCollected({ nickname, imageFile })
+      return
+    }
+
     setStatus('submitting')
     try {
       const result = await claimParticipant(nickname, { imageFile })
@@ -1008,6 +1039,12 @@ function App() {
   // it false and skips straight to awaitingChoice, unchanged from before rooms were dynamic.
   const [awaitingRoom, setAwaitingRoom] = useState(() => needsRoomChoice())
   const [awaitingChoice, setAwaitingChoice] = useState(() => needsParticipantChoice())
+  // Holds the name/photo ParticipantPicker collects before any room exists — in-memory only (not
+  // localStorage), since it's only ever read a moment later, once RoomEntryScreen resolves a room to
+  // submit it into. Null both before it's collected and once it's been handed off; awaitingRoom
+  // stays true across that handoff, so which of the two screens renders is decided by whether this
+  // is set, not by a third boolean.
+  const [pendingProfile, setPendingProfile] = useState(null)
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -1344,19 +1381,33 @@ function App() {
   // Below every hook, so the early return doesn't change how many run between renders. The effects
   // above all sit behind `backendLive`, which is false until a room exists, a participant is chosen,
   // and that profile is submitted, so nothing polls or classifies while either screen is up.
+  //
+  // awaitingRoom covers two screens in sequence, not one: no room exists yet, so there's nothing to
+  // claim a nickname into (see ParticipantPicker's onProfileCollected branch) — the name/photo are
+  // collected first and held in pendingProfile, *then* RoomEntryScreen resolves a room and submits
+  // that profile into it. Which of the two shows is decided by whether pendingProfile is set yet.
   if (awaitingRoom) {
+    if (!pendingProfile) {
+      return <ParticipantPicker onProfileCollected={setPendingProfile} />
+    }
     return (
       <RoomEntryScreen
+        profile={pendingProfile}
         onRoomReady={() => {
           setAwaitingRoom(false)
-          // createRoom/joinRoom already assigned USER_ID — re-derive fresh rather than trusting
+          // createRoom/joinRoom already assigned USER_ID, and RoomEntryScreen already submitted
+          // pendingProfile via claimParticipant — re-derive fresh rather than trusting
           // awaitingChoice's stale initial value (computed at mount, before any room existed, back
-          // when needsParticipantChoice necessarily read false).
+          // when needsParticipantChoice necessarily read false). Should read false now that the
+          // profile's been submitted, but this is the live source of truth, not an assumption.
           setAwaitingChoice(needsParticipantChoice())
         }}
       />
     )
   }
+  // Reached only via the legacy single fixed-room dev config (.env.local) — a room already exists,
+  // so ParticipantPicker's onChoose branch claims into it directly instead of going through
+  // RoomEntryScreen at all.
   if (awaitingChoice) {
     return (
       <ParticipantPicker
