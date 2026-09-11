@@ -644,7 +644,11 @@ function TypingIndicator() {
 
 // How long the "typing..." indicator (see TypingIndicator) shows before the auto-reply lands.
 const TYPING_REPLY_DELAY_MS = 1500
-const HEADER_HEIGHT = 135 // gap-8 + mood card (pt-16 + avatar row-52 + gap-10 + text-35 + pb-6 = 119) + gap-8
+// Base was 135 (gap-8 + mood card: pt-16 + avatar row-52 + gap-10 + text-35 + pb-6 = 119, + gap-8).
+// +17 for the name row added under the avatars (mt-[2px] gap + ~15px line of 10px text) — added to
+// the constant rather than borrowed from the existing slack below the mood text, so the collapsed
+// header keeps the same bottom breathing room it always had instead of the two nearly touching.
+const HEADER_HEIGHT = 152
 const INPUT_BAR_HEIGHT = 80 // pt-[8px] + h-[52px] + pb-[20px]
 // The real device's own OS status bar already shows above the browser viewport, so the app no
 // longer draws its own — HEADER_FOOTPRINT_PX is just the mood-card header now.
@@ -1750,6 +1754,21 @@ function App() {
               <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" imageSrc={serverPartner.profileImageUrl} />
               <ThreadLineTransition mood={threadState} />
               <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="pink" imageSrc={myProfile().profileImageUrl} />
+            </div>
+            {/* Names, not shown per-message the way a group chat would — with exactly two people,
+                which bubble is whose is already unambiguous from its side (see ChatBubbleRow), so
+                repeating a name on every bubble would just add clutter without adding information.
+                Once each, under the matching avatar, is enough. Same -mx-[12px]/w-[52px] frame as
+                the avatar row above so each name centers under its own avatar rather than the row.
+                Absent (both null) in local demo mode, since nobody's been through the profile
+                screen — the row collapses to its own small height either way, nothing shifts. */}
+            <div className="relative -mx-[12px] mt-[2px] flex items-center justify-between">
+              <span className="w-[52px] shrink-0 truncate text-center text-[10px] font-medium text-[#8a6f76]">
+                {serverPartner.nickname}
+              </span>
+              <span className="w-[52px] shrink-0 truncate text-center text-[10px] font-medium text-[#8a6f76]">
+                {myProfile().nickname}
+              </span>
             </div>
             <div className="mt-0 flex h-[35px] flex-col items-center justify-start gap-[3px] text-center">
               {!hasMessages ? (
