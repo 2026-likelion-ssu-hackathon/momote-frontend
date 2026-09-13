@@ -141,7 +141,16 @@ export function needsParticipantChoice() {
 // Whether no room has been resolved on this device at all yet — the state RoomEntryScreen exists
 // for. False whenever CHAT_ROOM_ID came from .env.local (the legacy single fixed-room dev config),
 // so that path skips straight to needsParticipantChoice exactly as it always has.
+//
+// A CHAT_ROOM_ID with neither a USER_ID nor a legacy BOOTSTRAP_USER_ID to claim into it can't be
+// acted on by anything in this file — claimParticipant has no id to authenticate with, and it isn't
+// mid-createRoom either (that sets both ids together, never just one). The only way to reach this
+// combination is a stale `momote.chatRoomId` left over from before this device ever went through the
+// invite-code flow (?reset deliberately doesn't clear it — see the block near the top of this file).
+// Treating it as "no room" routes back through create/join, which overwrites it with a real one,
+// rather than leaving this device stuck retrying a claim that can never succeed.
 export function needsRoomChoice() {
+  if (CHAT_ROOM_ID && !USER_ID && !BOOTSTRAP_USER_ID) return true
   return !CHAT_ROOM_ID
 }
 
