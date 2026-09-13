@@ -79,7 +79,12 @@ if (typeof window !== 'undefined') {
   }
 }
 
-let CHAT_ROOM_ID = resolveId('roomId', 'momote.chatRoomId', import.meta.env.VITE_CHAT_ROOM_ID)
+// Resolved separately from the final CHAT_ROOM_ID below (env fallback excluded here) so
+// needsRoomChoice can tell "this device picked a room via query/storage" apart from "there's no
+// stored room, so this build's .env.local value is standing in for one" — the two cases need
+// different validity rules once BOOTSTRAP_USER_ID enters the picture (see needsRoomChoice).
+const STORED_CHAT_ROOM_ID = resolveId('roomId', 'momote.chatRoomId', null)
+let CHAT_ROOM_ID = STORED_CHAT_ROOM_ID ?? import.meta.env.VITE_CHAT_ROOM_ID
 
 // Deliberately no env fallback: an unchosen user is the signal that this device should be asked who
 // it is (see ParticipantPicker in App.jsx). Falling back to the build value would silently make
@@ -142,15 +147,18 @@ export function needsParticipantChoice() {
 // for. False whenever CHAT_ROOM_ID came from .env.local (the legacy single fixed-room dev config),
 // so that path skips straight to needsParticipantChoice exactly as it always has.
 //
-// A CHAT_ROOM_ID with neither a USER_ID nor a legacy BOOTSTRAP_USER_ID to claim into it can't be
-// acted on by anything in this file — claimParticipant has no id to authenticate with, and it isn't
-// mid-createRoom either (that sets both ids together, never just one). The only way to reach this
-// combination is a stale `momote.chatRoomId` left over from before this device ever went through the
-// invite-code flow (?reset deliberately doesn't clear it — see the block near the top of this file).
-// Treating it as "no room" routes back through create/join, which overwrites it with a real one,
-// rather than leaving this device stuck retrying a claim that can never succeed.
+// A query/storage-sourced room id (STORED_CHAT_ROOM_ID) with no USER_ID next to it can't be a room
+// this device legitimately holds: createRoom, joinRoom, and an accepted join request all set both
+// ids together in the same success path, so the new flow never leaves one without the other. The
+// only way to reach that combination is a stale `momote.chatRoomId` left over from before this
+// device ever went through the invite-code flow (?reset deliberately doesn't clear it — see the
+// block near the top of this file). BOOTSTRAP_USER_ID doesn't rescue this case the way it does the
+// legacy config below — it was provisioned for one specific .env.local room, not whatever room id
+// happens to be sitting in this device's storage, so trying it just spends a request on a claim that
+// can never succeed (a real room but the wrong participant slot, e.g. the 403 this exact bug hit).
+// Treating it as "no room" routes back through create/join, which overwrites it with a real one.
 export function needsRoomChoice() {
-  if (CHAT_ROOM_ID && !USER_ID && !BOOTSTRAP_USER_ID) return true
+  if (STORED_CHAT_ROOM_ID && !USER_ID) return true
   return !CHAT_ROOM_ID
 }
 
