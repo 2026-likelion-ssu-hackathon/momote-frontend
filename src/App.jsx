@@ -3,6 +3,7 @@ import arrowUpIcon from './assets/icons/arrow-up.svg'
 import speechBubbleIcon from './assets/icons/speech-bubble.svg'
 import avatarBlue from './assets/avatars/avatar-blue.png'
 import avatarPink from './assets/avatars/avatar-pink.png'
+import avatarGray from './assets/avatars/avatar-gray.png'
 import threadHappyGif from './assets/thread/happy.gif'
 import threadLoveGif from './assets/thread/love.gif'
 import threadNeutralGif from './assets/thread/neutral.gif'
@@ -302,6 +303,16 @@ function ThreadLineTransition({ mood }) {
 const AVATAR_IMAGES = {
   blue: avatarBlue,
   pink: avatarPink,
+}
+
+// The placeholder before *this device's own* photo exists, chosen at profile setup (see
+// ParticipantPicker) rather than fixed by side/position like AVATAR_IMAGES above — gray until a
+// gender is picked, then the matching AVATAR_IMAGES color. Purely a local rendering choice (gender
+// is never sent to the backend), so it only ever affects how this device's own avatar looks to
+// itself; the partner's slot still falls back to AVATAR_IMAGES' fixed blue/pink.
+const GENDER_AVATAR_IMAGES = { male: avatarBlue, female: avatarPink }
+function avatarForGender(gender) {
+  return GENDER_AVATAR_IMAGES[gender] ?? avatarGray
 }
 
 // `imageSrc` overrides the blue/pink placeholder with a real photo — this device's own (from
@@ -758,7 +769,7 @@ function RoomEntryScreen({ profile, onRoomReady }) {
     setMode('creating')
     try {
       const result = await claimParticipant(profile.nickname, { imageFile: profile.imageFile })
-      rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
+      rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null, gender: profile.gender })
       setMode('created')
     } catch (err) {
       // The room itself already exists by the time this can fail — only my own nickname/photo
@@ -878,7 +889,7 @@ function RoomEntryScreen({ profile, onRoomReady }) {
           // creator. Without it, needsParticipantChoice() would still read true (a room and a user
           // id, but no remembered nickname) and send this device straight back to the profile
           // screen it already filled in once.
-          rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null })
+          rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null, gender: profile.gender })
           onRoomReady()
           return
         }
@@ -1147,6 +1158,9 @@ function ParticipantPicker({ onChoose, onProfileCollected }) {
   const [imageFile, setImageFile] = useState(null)
   const [previewUrl, setPreviewUrl] = useState(null)
   const [imageError, setImageError] = useState(null)
+  // 'male' | 'female' | null — null (no gender picked yet) is what keeps the placeholder gray;
+  // optional, same as the photo, so skipping it just leaves the gray avatar as this device's own.
+  const [gender, setGender] = useState(null)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
 
@@ -1193,7 +1207,7 @@ function ParticipantPicker({ onChoose, onProfileCollected }) {
     if (needsRoomChoice()) {
       // No room to claim into yet — RoomEntryScreen does the actual claimParticipant call once one
       // exists, so this is just handing the input upward, not a network call.
-      onProfileCollected({ nickname, imageFile })
+      onProfileCollected({ nickname, imageFile, gender })
       return
     }
 
@@ -1201,8 +1215,9 @@ function ParticipantPicker({ onChoose, onProfileCollected }) {
     try {
       const result = await claimParticipant(nickname, { imageFile })
       // The server is the source of truth for the nickname it actually stored, but falls back to
-      // what was typed in case a leaner response ever omits it.
-      rememberMyProfile({ nickname: result.nickname ?? nickname, profileImageUrl: result.profileImageUrl ?? null })
+      // what was typed in case a leaner response ever omits it. gender never goes to the server —
+      // see GENDER_AVATAR_IMAGES — so it's remembered straight from what was picked here.
+      rememberMyProfile({ nickname: result.nickname ?? nickname, profileImageUrl: result.profileImageUrl ?? null, gender })
       onChoose(result.userId)
     } catch (error) {
       console.warn('Could not claim a participant slot.', error)
@@ -1237,14 +1252,44 @@ function ParticipantPicker({ onChoose, onProfileCollected }) {
           한 번만 설정하면 이 기기에 저장돼요
         </p>
 
+        {/* Picks the placeholder's color (see avatarForGender) — gray until one of these is tapped,
+            then blue/pink. Optional, like the photo below: skipping it just leaves the gray avatar
+            as this device's own, so it never blocks 시작하기. */}
+        <div className="mt-[20px] flex items-center gap-[10px]">
+          <button
+            type="button"
+            onClick={() => setGender((g) => (g === 'male' ? null : 'male'))}
+            disabled={status === 'submitting'}
+            className={`rounded-[18px] border-[1.2px] px-5 py-[9px] text-[13px] font-semibold transition-colors duration-[120ms] disabled:cursor-default ${
+              gender === 'male'
+                ? 'border-[#7fa8f2] bg-[#eaf1ff] text-[#3f6fd6]'
+                : 'border-[#f4e0e5] bg-white/80 text-[#a6868e]'
+            }`}
+          >
+            남자
+          </button>
+          <button
+            type="button"
+            onClick={() => setGender((g) => (g === 'female' ? null : 'female'))}
+            disabled={status === 'submitting'}
+            className={`rounded-[18px] border-[1.2px] px-5 py-[9px] text-[13px] font-semibold transition-colors duration-[120ms] disabled:cursor-default ${
+              gender === 'female'
+                ? 'border-[#f2a0c1] bg-[#ffeef4] text-[#e8507d]'
+                : 'border-[#f4e0e5] bg-white/80 text-[#a6868e]'
+            }`}
+          >
+            여자
+          </button>
+        </div>
+
         <button
           type="button"
           onClick={handlePickImage}
           disabled={status === 'submitting'}
-          className="relative mt-[26px] flex size-[92px] shrink-0 cursor-pointer items-center justify-center transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default"
+          className="relative mt-[18px] flex size-[92px] shrink-0 cursor-pointer items-center justify-center transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default"
         >
           <div className="size-full overflow-hidden rounded-full border-[1.2px] border-[#f4e0e5] bg-white/80 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
-            <img src={previewUrl ?? avatarBlue} alt="" className="size-full object-cover" />
+            <img src={previewUrl ?? avatarForGender(gender)} alt="" className="size-full object-cover" />
           </div>
           {/* Badges the avatar as tappable — without it, a plain circular photo doesn't read as a
               button, especially before any photo is picked and it's just the placeholder. */}
@@ -1753,7 +1798,11 @@ function App() {
                   the conversation below it. */}
               <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" imageSrc={serverPartner.profileImageUrl} />
               <ThreadLineTransition mood={threadState} />
-              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="pink" imageSrc={myProfile().profileImageUrl} />
+              <DefaultAvatar
+                glow={THREAD_GLOW_COLORS[threadState]}
+                side="pink"
+                imageSrc={myProfile().profileImageUrl ?? avatarForGender(myProfile().gender)}
+              />
             </div>
             {/* Names, not shown per-message the way a group chat would — with exactly two people,
                 which bubble is whose is already unambiguous from its side (see ChatBubbleRow), so

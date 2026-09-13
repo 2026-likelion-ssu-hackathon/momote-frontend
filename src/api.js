@@ -192,8 +192,10 @@ export function chooseUserId(userId) {
 // way to read "my own" profile back from the server — it has to be remembered locally from the
 // moment this device claimed it. Same storage pair as chooseUserId, for the same reason
 // (sessionStorage wins across tabs on one browser; localStorage survives a reload of just this tab).
-export function rememberMyProfile({ nickname, profileImageUrl }) {
-  const value = JSON.stringify({ nickname: nickname ?? null, profileImageUrl: profileImageUrl ?? null })
+// gender ('male' | 'female' | null) never reaches the server — it exists only to pick this device's
+// own placeholder color (gray/blue/pink) when there's no profileImageUrl; see avatarForGender.
+export function rememberMyProfile({ nickname, profileImageUrl, gender }) {
+  const value = JSON.stringify({ nickname: nickname ?? null, profileImageUrl: profileImageUrl ?? null, gender: gender ?? null })
   for (const store of ['sessionStorage', 'localStorage']) {
     try {
       window[store].setItem('momote.myProfile', value)
@@ -216,7 +218,7 @@ export function myProfile() {
       // Storage unavailable — fall through to the next store, or the no-profile-yet default below.
     }
   }
-  return { nickname: null, profileImageUrl: null }
+  return { nickname: null, profileImageUrl: null, gender: null }
 }
 
 // POST /api/chat-rooms — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
