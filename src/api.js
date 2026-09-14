@@ -221,6 +221,19 @@ export function myProfile() {
   return { nickname: null, profileImageUrl: null, gender: null }
 }
 
+// Translates this app's own 'male' | 'female' vocabulary (see GENDER_AVATAR_IMAGES in App.jsx) to
+// and from the uppercase enum style the backend's other enums use (EmotionType, place category —
+// see EMOTION_TO_THREAD_STATE / PLACE_CATEGORY_LABELS below). Sent by claimParticipant/requestToJoin
+// so a device can eventually learn its *partner's* gender too, not just remember its own locally —
+// GET /api/chat-rooms/{id} needs to grow a matching `gender` field on `partner` for that half to
+// work; see fetchChatRoom's contract note. An unmapped/missing value reads as no gender picked,
+// same as never having sent one.
+const GENDER_TO_API = { male: 'MALE', female: 'FEMALE' }
+const API_TO_GENDER = { MALE: 'male', FEMALE: 'female' }
+export function genderFromApi(value) {
+  return API_TO_GENDER[value] ?? null
+}
+
 // POST /api/chat-rooms — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
 //
 //   Request:  POST /api/chat-rooms   (no body — nobody has an identity yet, that's the point of it)
@@ -244,12 +257,14 @@ export async function createRoom() {
   return result
 }
 
-// POST /api/chat-rooms/join-requests — NOT YET IMPLEMENTED ON THE BACKEND. Requested contract:
+// POST /api/chat-rooms/join-requests — Requested contract:
 //
 //   Request:  POST /api/chat-rooms/join-requests
 //             Content-Type: multipart/form-data
 //             fields: inviteCode (text, required), nickname (text, required),
 //                     profileImage (file, optional — same rules as claimParticipant's)
+//                     gender (text, optional — "MALE" | "FEMALE"; NOT YET IMPLEMENTED ON THE
+//                       BACKEND, see claimParticipant's contract note for why this one matters)
 //   Response: { "requestId": 55, "roomId": 42, "status": "PENDING" }
 //   Error:    404 if the code doesn't match any room, 409 if that room already has two participants
 //
@@ -257,11 +272,12 @@ export async function createRoom() {
 // Entering a code now creates a PENDING request instead — the room's creator has to review the
 // name/photo and accept it (see acceptJoinRequest) before this device becomes a real participant.
 // No auth header: this device isn't a participant of anything yet, which is the whole point.
-export async function requestToJoin(inviteCode, { nickname, imageFile } = {}) {
+export async function requestToJoin(inviteCode, { nickname, imageFile, gender } = {}) {
   const form = new FormData()
   form.append('inviteCode', inviteCode)
   form.append('nickname', nickname)
   if (imageFile) form.append('profileImage', imageFile)
+  if (gender) form.append('gender', GENDER_TO_API[gender] ?? gender)
   const response = await fetch(`${API_BASE_URL}/api/chat-rooms/join-requests`, {
     method: 'POST',
     body: form,
@@ -278,10 +294,11 @@ export async function requestToJoin(inviteCode, { nickname, imageFile } = {}) {
 // check on it, the same way a request only this device has ever seen is normally enough.
 //
 //   Response: { "requestId": 55, "status": "PENDING" | "ACCEPTED" | "REJECTED", "roomId": 42,
-//               "userId": 2, "nickname": "지민", "profileImageUrl": "https://.../abc.jpg" }
-//             roomId/userId/nickname/profileImageUrl are present only once status is ACCEPTED —
-//             that's this device's real, now-registered identity, echoing back exactly what
-//             requestToJoin submitted (mirroring what claimParticipant's response does for the
+//               "userId": 2, "nickname": "지민", "profileImageUrl": "https://.../abc.jpg",
+//               "gender": "FEMALE" }
+//             roomId/userId/nickname/profileImageUrl/gender are present only once status is
+//             ACCEPTED — that's this device's real, now-registered identity, echoing back exactly
+//             what requestToJoin submitted (mirroring what claimParticipant's response does for the
 //             legacy/creator paths). chooseRoomId/chooseUserId are called here, once accepted, for
 //             the same reason they're called inside createRoom; the caller still has to call
 //             rememberMyProfile itself with nickname/profileImageUrl, the same as every other path.
@@ -326,8 +343,8 @@ export function rejectJoinRequest(requestId) {
   return request(`/join-requests/${requestId}/reject`, { method: 'POST' })
 }
 
-// POST /api/chat-rooms/{id}/participants/claim — NOT YET IMPLEMENTED ON THE BACKEND. Requested
-// contract, for whoever picks this up on the backend team:
+// POST /api/chat-rooms/{id}/participants/claim — nickname and profileImage are live; gender is
+// NOT YET IMPLEMENTED ON THE BACKEND. Contract:
 //
 //   Request:  POST /api/chat-rooms/{roomId}/participants/claim
 //             Content-Type: multipart/form-data
@@ -337,14 +354,18 @@ export function rejectJoinRequest(requestId) {
 //                       sends this when the person uploaded a real photo instead of keeping the
 //                       default silhouette, so it's fine for the server to skip storage work when
 //                       the part is absent)
-//   Response: { "userId": 2, "nickname": "지민", "profileImageUrl": "https://.../abc.jpg" }
-//             profileImageUrl is null/omitted when no photo was uploaded.
+//                     gender (text, optional — "MALE" | "FEMALE"; NEW — see below)
+//   Response: { "userId": 2, "nickname": "지민", "profileImageUrl": "https://.../abc.jpg",
+//               "gender": "FEMALE" }
+//             profileImageUrl/gender are null/omitted when not provided.
 //   Error:    409 if both of the room's participant slots already have a customised nickname
 //
-// Also needs GET /api/chat-rooms/{id} to grow the same field on `partner` (profileImageUrl,
-// alongside the nickname it already returns) — that's the only way this device finds out the other
-// person's photo, the same way it already finds their nickname (see fetchChatRoom and pullRoom in
-// App.jsx).
+// gender is the one new piece here: today it's remembered locally (see rememberMyProfile in
+// App.jsx) purely so *this* device can pick its own gray/blue/pink placeholder — the partner has no
+// way to learn it, since nothing carries it across. Sending it and growing GET /api/chat-rooms/{id}'s
+// `partner` with the same field (alongside the profileImageUrl it already grew) closes that gap:
+// the partner's placeholder can use their real gender the same way this device's own already does,
+// instead of always falling back to the fixed blue used before this device knows any better.
 //
 // Fills in the name/photo for whichever slot this device already holds. "Already holds" has two
 // different sources depending on how this device got here:
@@ -356,7 +377,7 @@ export function rejectJoinRequest(requestId) {
 //     server-side and atomic: if the client instead read "which slot looks unclaimed" and then wrote
 //     to it, two people submitting within the same moment could both read "both slots free" and race
 //     onto the same id.
-export async function claimParticipant(nickname, { imageFile } = {}) {
+export async function claimParticipant(nickname, { imageFile, gender } = {}) {
   const authId = USER_ID ?? BOOTSTRAP_USER_ID
   if (!CHAT_ROOM_ID || !authId) {
     throw new Error('No chat room configured — cannot claim a participant slot.')
@@ -364,6 +385,7 @@ export async function claimParticipant(nickname, { imageFile } = {}) {
   const form = new FormData()
   form.append('nickname', nickname)
   if (imageFile) form.append('profileImage', imageFile)
+  if (gender) form.append('gender', GENDER_TO_API[gender] ?? gender)
   return request('/participants/claim', {
     method: 'POST',
     formData: form,
@@ -397,7 +419,9 @@ async function request(path, { method = 'GET', body, formData, query, asUserId }
   return response.json()
 }
 
-// GET /api/chat-rooms/{id} — room status and the partner's nickname/profile image.
+// GET /api/chat-rooms/{id} — room status and the partner's nickname/profile image/gender. `gender`
+// on `partner` ("MALE" | "FEMALE" | omitted) is NOT YET IMPLEMENTED ON THE BACKEND — see
+// claimParticipant's contract note; once it ships, run it through genderFromApi before use.
 export function fetchChatRoom() {
   return request('')
 }

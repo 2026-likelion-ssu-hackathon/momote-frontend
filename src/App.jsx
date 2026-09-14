@@ -21,6 +21,7 @@ import {
   fetchJoinRequestStatus,
   fetchMessages,
   fetchPendingJoinRequests,
+  genderFromApi,
   isBackendConfigured,
   myProfile,
   needsParticipantChoice,
@@ -784,7 +785,7 @@ function RoomEntryScreen({ profile, onRoomReady, onBack }) {
     setError(null)
     setMode('creating')
     try {
-      const result = await claimParticipant(profile.nickname, { imageFile: profile.imageFile })
+      const result = await claimParticipant(profile.nickname, { imageFile: profile.imageFile, gender: profile.gender })
       rememberMyProfile({ nickname: result.nickname ?? profile.nickname, profileImageUrl: result.profileImageUrl ?? null, gender: profile.gender })
       setMode('created')
     } catch (err) {
@@ -1274,7 +1275,7 @@ function ParticipantPicker({ onChoose, onProfileCollected, initialProfile }) {
 
     setStatus('submitting')
     try {
-      const result = await claimParticipant(nickname, { imageFile })
+      const result = await claimParticipant(nickname, { imageFile, gender })
       // The server is the source of truth for the nickname it actually stored, but falls back to
       // what was typed in case a leaner response ever omits it. gender never goes to the server —
       // see GENDER_AVATAR_IMAGES — so it's remembered straight from what was picked here.
@@ -1439,7 +1440,7 @@ function App() {
   const [serverSuggestion, setServerSuggestion] = useState({ type: null, props: null, triggerMessageIds: null, createdAt: null })
   // The partner's nickname/photo, for the header avatar (see pullRoom below) — "mine" doesn't need
   // polling, it's already known locally from the moment this device claimed it (see myProfile).
-  const [serverPartner, setServerPartner] = useState({ nickname: null, profileImageUrl: null })
+  const [serverPartner, setServerPartner] = useState({ nickname: null, profileImageUrl: null, gender: null })
   const lastMessageIdRef = useRef(null)
   const lastResultIdRef = useRef(null)
   // Lets handleSend jump the polling queue instead of waiting out the current delay — the moment
@@ -1516,6 +1517,7 @@ function App() {
       setServerPartner({
         nickname: room?.partner?.nickname ?? null,
         profileImageUrl: room?.partner?.profileImageUrl ?? null,
+        gender: genderFromApi(room?.partner?.gender),
       })
     }
 
@@ -1884,7 +1886,11 @@ function App() {
               {/* Left = partner, right = me — matches ChatBubbleRow, where `mine` renders on the
                   right (justify-end), so "my side" reads the same way in the header as it does in
                   the conversation below it. */}
-              <DefaultAvatar glow={THREAD_GLOW_COLORS[threadState]} side="blue" imageSrc={serverPartner.profileImageUrl} />
+              <DefaultAvatar
+                glow={THREAD_GLOW_COLORS[threadState]}
+                side="blue"
+                imageSrc={serverPartner.profileImageUrl ?? avatarForGender(serverPartner.gender)}
+              />
               <ThreadLineTransition mood={threadState} />
               <DefaultAvatar
                 glow={THREAD_GLOW_COLORS[threadState]}
