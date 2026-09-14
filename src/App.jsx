@@ -725,6 +725,14 @@ function CameraIcon({ className = '' }) {
   )
 }
 
+function CloseIcon({ className = '' }) {
+  return (
+    <svg viewBox="0 0 20 20" className={className} fill="none" aria-hidden="true">
+      <path d="M5.5 5.5 14.5 14.5M14.5 5.5 5.5 14.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" />
+    </svg>
+  )
+}
+
 // Shown before ParticipantPicker, only when this device doesn't belong to any room yet (see
 // needsRoomChoice) — the legacy single fixed-room dev config (.env.local) skips this screen
 // entirely and goes straight to ParticipantPicker, unchanged.
@@ -1200,6 +1208,18 @@ function ParticipantPicker({ onChoose, onProfileCollected }) {
     })
   }
 
+  // Drops the picked photo back to the gender placeholder (see avatarForGender) — the only way
+  // back once handlePickImage has been used, since re-tapping the avatar just opens the file
+  // dialog again rather than clearing it.
+  function handleRemoveImage() {
+    setPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev)
+      return null
+    })
+    setImageFile(null)
+    setImageError(null)
+  }
+
   async function handleSubmit() {
     const nickname = name.trim()
     if (!nickname || status === 'submitting') return
@@ -1282,21 +1302,36 @@ function ParticipantPicker({ onChoose, onProfileCollected }) {
           </button>
         </div>
 
-        <button
-          type="button"
-          onClick={handlePickImage}
-          disabled={status === 'submitting'}
-          className="relative mt-[18px] flex size-[92px] shrink-0 cursor-pointer items-center justify-center transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default"
-        >
-          <div className="size-full overflow-hidden rounded-full border-[1.2px] border-[#f4e0e5] bg-white/80 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
-            <img src={previewUrl ?? avatarForGender(gender)} alt="" className="size-full object-cover" />
-          </div>
-          {/* Badges the avatar as tappable — without it, a plain circular photo doesn't read as a
-              button, especially before any photo is picked and it's just the placeholder. */}
-          <span className="absolute bottom-0 right-0 flex size-[30px] items-center justify-center rounded-full bg-[#f25597] text-white shadow-[0_2px_8px_rgba(242,85,151,0.4)]">
-            <CameraIcon className="size-[15px]" />
-          </span>
-        </button>
+        <div className="relative mt-[18px] flex size-[92px] shrink-0 items-center justify-center">
+          <button
+            type="button"
+            onClick={handlePickImage}
+            disabled={status === 'submitting'}
+            className="flex size-full cursor-pointer items-center justify-center transition-transform duration-[120ms] ease-out hover:scale-[1.03] active:scale-[0.97] disabled:cursor-default"
+          >
+            <div className="size-full overflow-hidden rounded-full border-[1.2px] border-[#f4e0e5] bg-white/80 shadow-[0_2px_20px_rgba(255,207,219,0.7)]">
+              <img src={previewUrl ?? avatarForGender(gender)} alt="" className="size-full object-cover" />
+            </div>
+            {/* Badges the avatar as tappable — without it, a plain circular photo doesn't read as a
+                button, especially before any photo is picked and it's just the placeholder. */}
+            <span className="absolute bottom-0 right-0 flex size-[30px] items-center justify-center rounded-full bg-[#f25597] text-white shadow-[0_2px_8px_rgba(242,85,151,0.4)]">
+              <CameraIcon className="size-[15px]" />
+            </span>
+          </button>
+          {/* Only once there's a real photo to drop — the gender placeholder has nothing to remove
+              back to. Sits opposite the camera badge so the two never fight for the same corner. */}
+          {previewUrl && (
+            <button
+              type="button"
+              onClick={handleRemoveImage}
+              disabled={status === 'submitting'}
+              aria-label="기본 프로필로 변경"
+              className="absolute right-0 top-0 flex size-[26px] cursor-pointer items-center justify-center rounded-full bg-white text-[#a6868e] shadow-[0_2px_8px_rgba(0,0,0,0.18)] transition-transform duration-[120ms] ease-out hover:scale-[1.05] active:scale-[0.95] disabled:cursor-default"
+            >
+              <CloseIcon className="size-[12px]" />
+            </button>
+          )}
+        </div>
         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleImageChange} className="hidden" />
         {imageError && (
           <p className="mt-[8px] text-center text-[12px] font-medium text-[#e8507d]">{imageError}</p>
