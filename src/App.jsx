@@ -733,6 +733,14 @@ function CloseIcon({ className = '' }) {
   )
 }
 
+function BackIcon({ className = '' }) {
+  return (
+    <svg viewBox="0 0 20 20" className={className} fill="none" aria-hidden="true">
+      <path d="M12 4.5 6 10l6 5.5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 // Shown before ParticipantPicker, only when this device doesn't belong to any room yet (see
 // needsRoomChoice) — the legacy single fixed-room dev config (.env.local) skips this screen
 // entirely and goes straight to ParticipantPicker, unchanged.
@@ -753,7 +761,7 @@ function CloseIcon({ className = '' }) {
 // no reply latency to hide.
 const ROOM_JOIN_REQUEST_POLL_MS = 2000
 
-function RoomEntryScreen({ profile, onRoomReady }) {
+function RoomEntryScreen({ profile, onRoomReady, onBack }) {
   // 'choice' | 'creating' | 'created' | 'reviewing' | 'profile-error'   — room creator (A)
   // | 'joining' | 'awaiting-approval' | 'rejected'                     — requester (B)
   const [mode, setMode] = useState('choice')
@@ -1102,6 +1110,21 @@ function RoomEntryScreen({ profile, onRoomReady }) {
   return (
     <div className="flex h-dvh w-full items-center justify-center overflow-hidden bg-[#fff5f7]">
       <div className="relative flex h-full w-full max-w-[480px] flex-col items-center justify-center overflow-hidden bg-gradient-to-b from-[#fff6fa] from-[40%] to-[#ffa3c6] to-[95.056%] px-8">
+        {/* Only in plain 'choice' — once creating/joining is under way (busy) a room or join
+            request may already exist server-side, so backing out here would either orphan it or
+            hand the profile screen a device that already half-belongs to a room. Every other mode
+            (created/reviewing/awaiting-approval/rejected/profile-error) has its own screen entirely
+            and never reaches this one, so this is also the only place onBack needs to be offered. */}
+        {onBack && !busy && (
+          <button
+            type="button"
+            onClick={onBack}
+            aria-label="이전으로"
+            className="absolute left-[14px] top-[14px] flex size-[34px] cursor-pointer items-center justify-center rounded-full bg-white/80 text-[#7d6a71] shadow-[0_2px_10px_rgba(255,207,219,0.7)] transition-transform duration-[120ms] ease-out hover:scale-[1.05] active:scale-[0.95]"
+          >
+            <BackIcon className="size-[16px]" />
+          </button>
+        )}
         <p className="font-['MemomentKkukkukk'] text-[38px] leading-none tracking-[0.4px] text-[#f25597]">
           momote
         </p>
@@ -1160,20 +1183,38 @@ function RoomEntryScreen({ profile, onRoomReady }) {
 //     set it), so this claims into it directly, exactly as before this screen could ever run first.
 // handleSubmit picks between the two based on needsRoomChoice(), so callers only need to pass
 // whichever one applies to how this device got here.
-function ParticipantPicker({ onChoose, onProfileCollected }) {
-  const [name, setName] = useState('')
+// `initialProfile` re-seeds a previous pick — App() hands this screen's own last output back in
+// when a later screen's onBack returns here, so backing out of room choice doesn't wipe out a name,
+// photo, or gender someone already picked. Undefined on every other path (the legacy onChoose
+// caller, and this screen's own very first render), which is exactly when the blank defaults belong.
+function ParticipantPicker({ onChoose, onProfileCollected, initialProfile }) {
+  const [name, setName] = useState(initialProfile?.nickname ?? '')
   const [status, setStatus] = useState('idle') // 'idle' | 'submitting' | 'error'
-  const [imageFile, setImageFile] = useState(null)
+  const [imageFile, setImageFile] = useState(initialProfile?.imageFile ?? null)
   const [previewUrl, setPreviewUrl] = useState(null)
   const [imageError, setImageError] = useState(null)
   // 'male' | 'female' | null — null (no gender picked yet) is what keeps the placeholder gray;
   // optional, same as the photo, so skipping it just leaves the gray avatar as this device's own.
-  const [gender, setGender] = useState(null)
+  const [gender, setGender] = useState(initialProfile?.gender ?? null)
   const inputRef = useRef(null)
   const fileInputRef = useRef(null)
 
   useEffect(() => {
     inputRef.current?.focus()
+  }, [])
+
+  // Re-derives the preview for a photo that came back via initialProfile. Deliberately its own
+  // effect rather than a lazy useState(() => URL.createObjectURL(...)) initializer: StrictMode's
+  // dev-only mount→cleanup→mount replay would run the *other* previewUrl-cleanup effect below
+  // against that URL in between, revoking it before it was ever shown. Owning both the create and
+  // the revoke in one effect keeps the pair atomic through that replay — see React's docs on
+  // effects that produce their own cleanup.
+  useEffect(() => {
+    if (!initialProfile?.imageFile) return
+    const url = URL.createObjectURL(initialProfile.imageFile)
+    setPreviewUrl(url)
+    return () => URL.revokeObjectURL(url)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // Revokes the previous object URL whenever a new photo replaces it, and on unmount — otherwise
@@ -1374,12 +1415,14 @@ function App() {
   // it false and skips straight to awaitingChoice, unchanged from before rooms were dynamic.
   const [awaitingRoom, setAwaitingRoom] = useState(() => needsRoomChoice())
   const [awaitingChoice, setAwaitingChoice] = useState(() => needsParticipantChoice())
-  // Holds the name/photo ParticipantPicker collects before any room exists — in-memory only (not
-  // localStorage), since it's only ever read a moment later, once RoomEntryScreen resolves a room to
-  // submit it into. Null both before it's collected and once it's been handed off; awaitingRoom
-  // stays true across that handoff, so which of the two screens renders is decided by whether this
-  // is set, not by a third boolean.
+  // Holds the name/photo/gender ParticipantPicker collects before any room exists — in-memory only
+  // (not localStorage), since it's only ever read a moment later, once RoomEntryScreen resolves a
+  // room to submit it into. Kept even after RoomEntryScreen starts (unlike before this had a back
+  // button) so a later onBack can hand it straight back to ParticipantPicker as initialProfile
+  // instead of making someone re-enter everything; roomEntryStarted is what actually decides which
+  // of the two screens renders.
   const [pendingProfile, setPendingProfile] = useState(null)
+  const [roomEntryStarted, setRoomEntryStarted] = useState(false)
 
   const [messages, setMessages] = useState([])
   const [inputValue, setInputValue] = useState('')
@@ -1720,14 +1763,24 @@ function App() {
   // awaitingRoom covers two screens in sequence, not one: no room exists yet, so there's nothing to
   // claim a nickname into (see ParticipantPicker's onProfileCollected branch) — the name/photo are
   // collected first and held in pendingProfile, *then* RoomEntryScreen resolves a room and submits
-  // that profile into it. Which of the two shows is decided by whether pendingProfile is set yet.
+  // that profile into it. Which of the two shows is decided by roomEntryStarted, not by whether
+  // pendingProfile itself is set — it stays populated across a trip back to ParticipantPicker too.
   if (awaitingRoom) {
-    if (!pendingProfile) {
-      return <ParticipantPicker onProfileCollected={setPendingProfile} />
+    if (!roomEntryStarted) {
+      return (
+        <ParticipantPicker
+          initialProfile={pendingProfile}
+          onProfileCollected={(collected) => {
+            setPendingProfile(collected)
+            setRoomEntryStarted(true)
+          }}
+        />
+      )
     }
     return (
       <RoomEntryScreen
         profile={pendingProfile}
+        onBack={() => setRoomEntryStarted(false)}
         onRoomReady={() => {
           setAwaitingRoom(false)
           // createRoom/joinRoom already assigned USER_ID, and RoomEntryScreen already submitted
